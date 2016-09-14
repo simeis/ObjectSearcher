@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">ObjectSearcher</string>
+    <string name="image_post_url">http://simeiscomet.com/objectsearcher/ImageGet.php</string>
+
+    <string name="dummy_button">Dummy Button</string>
+    <string name="dummy_content">DUMMY\nCONTENT</string>
+</resources>
