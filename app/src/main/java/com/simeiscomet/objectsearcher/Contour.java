@@ -21,17 +21,11 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.Toast;
 
-import com.android.volley.RequestQueue;
-import com.android.volley.Response;
-import com.android.volley.VolleyError;
-
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Random;
 
 /**
@@ -356,7 +350,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         PointF ret = new PointF( 1.0f, 1.0f );
 
         float prevLong = Math.max( _camView.getPrevWidth(), _camView.getPrevHeight() );
-        float prevShort = Math.min(_camView.getPrevWidth(), _camView.getPrevHeight());
+        float prevShort = Math.min( _camView.getPrevWidth(), _camView.getPrevHeight() );
 
         switch( _camView.getRotate() ){
             case Surface.ROTATION_0:
@@ -441,15 +435,6 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
     private void _sendImage( Bitmap image )
     {
-        RequestQueue rQueue = null;
-        try {
-            rQueue = VolleyHelper.getRequestQueue( _context );
-        } catch ( IOException e ){
-            Log.e("RequestQueueError", "" + e.toString() );
-            Toast.makeText( _context, "送信に失敗しました", Toast.LENGTH_SHORT ).show();
-            return;
-        }
-
         // cashフォルダを指定
         File dir = _context.getCacheDir();
 
@@ -466,31 +451,6 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             Toast.makeText( _context, "一時ファイルの切り離しに失敗しました", Toast.LENGTH_SHORT ).show();
             return;
         }
-
-        Map<String, String> stringParts = new HashMap<String, String>();
-        stringParts.put("key", "value");
-
-        Map<String, File> fileParts = new HashMap<String, File>();
-        File file = new File( dir, fileName );
-        fileParts.put("upfile", file);
-
-        MultipartRequest postRequest = new MultipartRequest( _context.getString( R.string.image_post_url ), stringParts, fileParts,
-            new Response.Listener<String>() {
-                @Override
-                public void onResponse( String response ) {
-                    Log.d("Upload", "success: " + response );
-                    Toast.makeText( _context, "画像の送信に成功しました", Toast.LENGTH_SHORT ).show();
-                }
-            },
-            new Response.ErrorListener() {
-                @Override
-                public void onErrorResponse( VolleyError error ) {
-                    Log.d("Upload", "error: " + error.getMessage() );
-                    Toast.makeText( _context, "画像の送信に失敗しました", Toast.LENGTH_SHORT ).show();
-                }
-            });
-        rQueue.add( postRequest );
-        //rQueue.start();
 
         try {
             _tmpImageDelete( dir, fileName, image );
