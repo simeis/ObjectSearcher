@@ -9,6 +9,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.widget.FrameLayout;
+import android.widget.Toast;
 
 /**
  * An example full-screen activity that shows and hides the system UI (i.e.
@@ -131,16 +132,19 @@ public class Main extends AppCompatActivity {
         final Effect effect = new Effect( this );
         f.addView( effect );
 
+        Toast.makeText( getApplicationContext(), "タップで撮影します", Toast.LENGTH_LONG ).show();
         f.setOnTouchListener( new View.OnTouchListener() {
             public boolean onTouch( View v, MotionEvent event ) {
-                if( camView.isShot() == false ){
+                if( !camView.isShot() ){
                     camView.shotImage( v, event );
                 } else {
                     if( mMode == Mode.FOCUS ){
+                        Toast.makeText( getApplicationContext(), "ドラッグで輪郭描画\n2点タップで映像に戻ります", Toast.LENGTH_LONG ).show();
                         mMode = Mode.CONTOUR;
                         effect.setVisibility( View.GONE );
                     }
-                    if( contour.drawContour( v, event ) == false ){
+                    if( !contour.drawContour( v, event ) ){
+                        Toast.makeText( getApplicationContext(), "タップで撮影します", Toast.LENGTH_LONG ).show();
                         mMode = Mode.FOCUS;
                         camView.shotImage( v, event );
                         effect.setVisibility( View.VISIBLE );

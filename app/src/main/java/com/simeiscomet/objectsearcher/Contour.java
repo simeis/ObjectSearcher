@@ -19,8 +19,19 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.Toast;
 
+import com.android.volley.RequestQueue;
+import com.android.volley.Response;
+import com.android.volley.VolleyError;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Random;
 
 /**
@@ -41,6 +52,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
     Mode _mode = Mode.WAITING;
 
+    private Context _context;
+
     private SurfaceHolder _holder;
     
     private Display _display;
@@ -58,13 +71,14 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     private PointF[] _weightPoints = new PointF[MAX_CLUSTER];
     private ArrayList<Point> _lineSegment = new ArrayList<>();
 
-    private PointF _ratio = new PointF();
+    //private PointF _ratio = new PointF();
 
     private Bitmap _object = null;
     
     public Contour( Context context, CameraView camView )
     {
         super( context );
+        _context = context;
         _holder = getHolder();
         _holder.addCallback( this );
         //holder.setType( SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS );
@@ -232,6 +246,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             Paint paint = new Paint();
             paint.setColor( Color.MAGENTA );
             canvas.drawColor( Color.TRANSPARENT, PorterDuff.Mode.CLEAR );
+
+            // 線分描画
             if( _points.size() >= 2 ){
                 for( int i=0; i<_points.size()-1; ++i ){
                     canvas.drawLine( _points.get( i ).x, _points.get( i ).y, _points.get( i + 1 ).x, _points.get( i + 1 ).y, paint );
@@ -241,10 +257,12 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 }
             }
 
+            // 頂点描画
             for( final PointF pos : _points ) {
                 canvas.drawCircle( pos.x, pos.y, 10, paint );
             }
 
+            // 矩形描画
             if( _mode == Mode.FINISHED || _mode == Mode.SELECTED ){
                 paint.setColor( Color.WHITE );
                 for( int i=0; i<3; ++i ){
@@ -272,129 +290,245 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
     private void _objectExtraction()
     {
+        Matrix matrix = _generateMatrix();
+        Bitmap bitmap = Bitmap.createBitmap( _camView.getBitmap(), 0, 0, _camView.getPrevWidth(), _camView.getPrevHeight(), matrix, false );
+
+        PointF ratio = _calculateRatio();
+        PointF invRatio = new PointF( 1.0f/ratio.x, 1.0f/ratio.y );
+
+        _movePoint( _points, invRatio );
+
+        // 輪郭移動
+        _circumscribedQuadrangle( 0.1 );
+        _fitTheContour( bitmap );
+        _circumscribedQuadrangle( 0.1 );
+
+        // 物体画像抽出
+        _object = _objectImageExtraction( bitmap );
+
+        if( _object == null ){
+            _points.clear();
+            _clearCanvas();
+            _mode = Mode.WAITING;
+            return;
+        }
+
+        _sendImage( _object );
+
+        _movePoint( _points, ratio );
+        _movePoint( _cornerPos, ratio, 4 );
+        _movePoint( _weightPoints, ratio, MAX_CLUSTER );
+
+        _mode = Mode.SELECTED;
+    }
+
+
+    private Matrix _generateMatrix()
+    {
+        Matrix ret = new Matrix();
+
+        switch( _camView.getRotate() ){
+        case Surface.ROTATION_0:
+            ret.preScale( 1, -1 );
+            break;
+        case Surface.ROTATION_90:
+            ret.preScale( 1, 1 );
+            break;
+        case Surface.ROTATION_180:
+            ret.preScale( -1, 1 );
+            break;
+        case Surface.ROTATION_270:
+            ret.preScale( -1, -1 );
+            break;
+        }
+
+        return ret;
+    }
+
+
+    private PointF _calculateRatio()
+    {
         //Log.d("prev", "w"+ _camView.getPrevWidth());
         //Log.d("prev", "h"+ _camView.getPrevHeight());
         //Log.d("view", "w"+ _camView.getWidth());
         //Log.d("view", "h"+ _camView.getHeight());
 
-        float prevLong = Math.max(_camView.getPrevWidth(), _camView.getPrevHeight());
+        PointF ret = new PointF( 1.0f, 1.0f );
+
+        float prevLong = Math.max( _camView.getPrevWidth(), _camView.getPrevHeight() );
         float prevShort = Math.min(_camView.getPrevWidth(), _camView.getPrevHeight());
 
         switch( _camView.getRotate() ){
             case Surface.ROTATION_0:
             case Surface.ROTATION_180:
-                _ratio = new PointF( prevShort / _camView.getWidth(),
-                                       prevLong / _camView.getHeight() );
+                ret = new PointF( prevShort / _camView.getWidth(),
+                                   prevLong / _camView.getHeight() );
                 break;
             case Surface.ROTATION_90:
             case Surface.ROTATION_270:
-                _ratio = new PointF( prevLong / _camView.getWidth(),
-                                       prevShort / _camView.getHeight() );
+                ret = new PointF( prevLong / _camView.getWidth(),
+                                   prevShort / _camView.getHeight() );
                 break;
         }
 
-        PointF tmp;
-        Matrix matrix = new Matrix();
-        Bitmap bitmap;
-
-        switch( _camView.getRotate() ){
-        case Surface.ROTATION_0:
-        case Surface.ROTATION_180:
-            for( final PointF pos : _points ){
-                tmp = new PointF( pos.x, pos.y );
-                pos.x = tmp.y * _ratio.y;
-                pos.y = tmp.x * _ratio.x;
-            }
-            break;
-        case Surface.ROTATION_90:
-        case Surface.ROTATION_270:
-            for( final PointF pos : _points ){
-                tmp = new PointF( pos.x, pos.y );
-                pos.x = tmp.x * _ratio.x;
-                pos.y = tmp.y * _ratio.y;
-            }
-            break;
-        }
-
-        switch( _camView.getRotate() ){
-        case Surface.ROTATION_0:
-            matrix.preScale( 1, -1 );
-            break;
-        case Surface.ROTATION_90:
-            matrix.preScale( 1, 1 );
-            break;
-        case Surface.ROTATION_180:
-            matrix.preScale( -1, 1 );
-            break;
-        case Surface.ROTATION_270:
-            matrix.preScale( -1, -1 );
-            break;
-        }
-
-        bitmap = Bitmap.createBitmap( _camView.getBitmap(), 0, 0, _camView.getPrevWidth(), _camView.getPrevHeight(), matrix, false );
-
-        // 輪郭移動
-        _circumscribedQuadrangle(0.1);
-        _fitTheContour(bitmap);
-        _circumscribedQuadrangle(0.1);
-
-        try {
-            _object = _projectiveTransformation(bitmap);
-        } catch( Exception e ) {
-            Log.e("P.T. Error", e.getMessage() );
-        }
-
-        switch( _camView.getRotate() ){
-        case Surface.ROTATION_0:
-        case Surface.ROTATION_180:
-            for( final PointF pos : _points ){
-                tmp = new PointF( pos.x, pos.y );
-                pos.x = tmp.y / _ratio.y;
-                pos.y = tmp.x / _ratio.x;
-            }
-            break;
-        case Surface.ROTATION_90:
-        case Surface.ROTATION_270:
-            for( final PointF pos : _points ){
-                tmp = new PointF( pos.x, pos.y );
-                pos.x = tmp.x / _ratio.x;
-                pos.y = tmp.y / _ratio.y;
-            }
-            break;
-        }
-
-        switch( _camView.getRotate() ){
-        case Surface.ROTATION_0:
-        case Surface.ROTATION_180:
-            for( int i=0; i<4; ++i ){
-                tmp = new PointF( _cornerPos[i].x, _cornerPos[i].y );
-                _cornerPos[i].x = tmp.y / _ratio.y;
-                _cornerPos[i].y = tmp.x / _ratio.x;
-            }
-            for( int i=0; i<MAX_CLUSTER; ++i ){
-                tmp = new PointF( _weightPoints[i].x, _weightPoints[i].y );
-                _weightPoints[i].x = tmp.y / _ratio.y;
-                _weightPoints[i].y = tmp.x / _ratio.x;
-            }
-            break;
-        case Surface.ROTATION_90:
-        case Surface.ROTATION_270:
-            for( int i=0; i<4; ++i ){
-                tmp = new PointF( _cornerPos[i].x, _cornerPos[i].y );
-                _cornerPos[i].x = tmp.x / _ratio.x;
-                _cornerPos[i].y = tmp.y / _ratio.y;
-            }
-            for( int i=0; i<MAX_CLUSTER; ++i ){
-                tmp = new PointF( _weightPoints[i].x, _weightPoints[i].y );
-                _weightPoints[i].x = tmp.x / _ratio.x;
-                _weightPoints[i].y = tmp.y / _ratio.y;
-            }
-            break;
-        }
-
-        _mode = Mode.SELECTED;
+        return ret;
     }
 
+    private void _movePoint( ArrayList<PointF> points, PointF ratio )
+    {
+        PointF tmp;
+
+        switch( _camView.getRotate() ){
+        case Surface.ROTATION_0:
+        case Surface.ROTATION_180:
+            for( final PointF pos : points ){
+                tmp = new PointF( pos.x, pos.y );
+                pos.x = tmp.y / ratio.y;
+                pos.y = tmp.x / ratio.x;
+            }
+            break;
+        case Surface.ROTATION_90:
+        case Surface.ROTATION_270:
+            for( final PointF pos : points ){
+                tmp = new PointF( pos.x, pos.y );
+                pos.x = tmp.x / ratio.x;
+                pos.y = tmp.y / ratio.y;
+            }
+            break;
+        }
+    }
+
+    private void _movePoint( PointF[] points, PointF ratio, int num )
+    {
+        PointF tmp;
+
+        switch( _camView.getRotate() ){
+        case Surface.ROTATION_0:
+        case Surface.ROTATION_180:
+            for( int i=0; i<num; ++i ){
+                tmp = new PointF( points[i].x, points[i].y );
+                points[i].x = tmp.y / ratio.y;
+                points[i].y = tmp.x / ratio.x;
+            }
+            break;
+        case Surface.ROTATION_90:
+        case Surface.ROTATION_270:
+            for( int i=0; i<num; ++i ){
+                tmp = new PointF( points[i].x, points[i].y );
+                points[i].x = tmp.x / ratio.x;
+                points[i].y = tmp.y / ratio.y;
+            }
+            break;
+        }
+    }
+
+
+    private Bitmap _objectImageExtraction( Bitmap bitmap )
+    {
+        Bitmap object;
+
+        try {
+            object = _projectiveTransformation(bitmap);
+        } catch( Exception e ) {
+            Log.e("P.T. Error", e.getMessage());
+            Toast.makeText( _context, "輪郭が細すぎます", Toast.LENGTH_SHORT ).show();
+            return null;
+        }
+
+        return object;
+    }
+
+
+    private void _sendImage( Bitmap image )
+    {
+        RequestQueue rQueue = null;
+        try {
+            rQueue = VolleyHelper.getRequestQueue( _context );
+        } catch ( IOException e ){
+            Log.e("RequestQueueError", "" + e.toString() );
+            Toast.makeText( _context, "送信に失敗しました", Toast.LENGTH_SHORT ).show();
+            return;
+        }
+
+        // cashフォルダを指定
+        File dir = _context.getCacheDir();
+
+        String fileName = "objectsearcher_cashimage.png";
+
+        try {
+            _tmpImageSave( dir, fileName, image );
+        } catch ( FileNotFoundException e1 ){
+            Log.e("Error", "" + e1.toString() );
+            Toast.makeText( _context, "一時ファイルの作成に失敗しました", Toast.LENGTH_SHORT ).show();
+            return;
+        } catch ( IOException e2 ){
+            Log.e("Error", "" + e2.toString());
+            Toast.makeText( _context, "一時ファイルの切り離しに失敗しました", Toast.LENGTH_SHORT ).show();
+            return;
+        }
+
+        Map<String, String> stringParts = new HashMap<String, String>();
+        stringParts.put("key", "value");
+
+        Map<String, File> fileParts = new HashMap<String, File>();
+        File file = new File( dir, fileName );
+        fileParts.put("upfile", file);
+
+        MultipartRequest postRequest = new MultipartRequest( _context.getString( R.string.image_post_url ), stringParts, fileParts,
+            new Response.Listener<String>() {
+                @Override
+                public void onResponse( String response ) {
+                    Log.d("Upload", "success: " + response );
+                    Toast.makeText( _context, "画像の送信に成功しました", Toast.LENGTH_SHORT ).show();
+                }
+            },
+            new Response.ErrorListener() {
+                @Override
+                public void onErrorResponse( VolleyError error ) {
+                    Log.d("Upload", "error: " + error.getMessage() );
+                    Toast.makeText( _context, "画像の送信に失敗しました", Toast.LENGTH_SHORT ).show();
+                }
+            });
+        rQueue.add( postRequest );
+        //rQueue.start();
+
+        try {
+            _tmpImageDelete( dir, fileName, image );
+        } catch ( NullPointerException e1 ){
+            Log.e("Error", "" + e1.toString() );
+            Toast.makeText( _context, "一時ファイルの削除に失敗しました", Toast.LENGTH_SHORT ).show();
+            return;
+        } catch ( SecurityException e2 ){
+            Log.e("Error", "" + e2.toString());
+            Toast.makeText( _context, "一時ファイルへのアクセスに失敗しました", Toast.LENGTH_SHORT ).show();
+            return;
+        }
+    }
+
+
+    private void _tmpImageSave( File dir, String fileName, Bitmap image ) throws FileNotFoundException, IOException
+    {
+        // 保存処理開始
+        FileOutputStream fos = null;
+        fos = new FileOutputStream( new File( dir, fileName ) );
+
+        // jpegで保存
+        image.compress( Bitmap.CompressFormat.PNG, 100, fos );
+
+        // 保存処理終了
+        fos.close();
+    }
+
+
+    private void _tmpImageDelete( File dir, String fileName, Bitmap image ) throws NullPointerException, SecurityException
+    {
+        // 削除処理開始
+        File f = null;
+        f = new File( dir, fileName );
+
+        // 削除
+        f.delete();
+    }
 
     private Bitmap _projectiveTransformation( Bitmap image )
     {
@@ -402,8 +536,9 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         // 画像の幅
         Rect rect = new Rect( 0, 0, (int)_calculateDistance( _cornerPos[0], _cornerPos[1] ), (int)_calculateDistance( _cornerPos[0], _cornerPos[3] ) );
 
-        if( rect.width() <= 0 || rect.height() <= 0 )
+        if( rect.width() <= 10 || rect.height() <= 10 ) {
             throw new RuntimeException("Contour size is minimum.");
+        }
 
         /*  行列作成  */
         // 行列A
@@ -432,7 +567,12 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         // 積
         Matrix2D matX = Matrix2D.mult( invA, new Matrix2D( matB ) );
 
-        double[][] dMatX = matX.getArrays();
+        double[][] dMatX;
+        if( matX.getArrays() != null ) {
+            dMatX = matX.getArrays();
+        } else {
+            throw new RuntimeException("Matrix is NULL.");
+        }
 
         // 画像生成
         Bitmap object;
@@ -505,7 +645,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                             // 実際に画素を取得
                             int colorProcess = Color.BLACK;
                             if( current.x >= 0 || current.y >= 0 || current.x <= rect.width()-1 || current.y <= rect.height()-1 ){
-                                colorProcess = image.getPixel( current.x, current.y );
+                                colorProcess = _getColor( image, current );
                             }
 
                             // 画素をRGB分割し、重みをかけて足し合わせる
@@ -580,7 +720,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                             }
 
                             // 実際に画素を取得
-                            int colorProcess = preImage.getPixel( current.x, current.y );
+                            int colorProcess = _getColor(preImage, current);
 
                             // 画素をRGB分割し、重みをかけて足し合わせる
                             insertR += ( Color.red( colorProcess ) * weight );
@@ -801,7 +941,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     //Log.d("GetPixPos", "x:"+ pos.x );
                     //Log.d("GetPixPos", "y:"+ pos.y );
 
-                    int tmp = image.getPixel( pos.x, pos.y );
+                    int tmp = _getColor(image, pos);
 
                     r += Color.red( tmp );
                     g += Color.green( tmp );
@@ -857,8 +997,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     Point nowPos = posInLine( nearestPointF, _points.get( k ), i );
                     Point nextPos = posInLine( nearestPointF, _points.get( k ), i-1 );
 
-                    int nowColor = image.getPixel( nowPos.x, nowPos.y );
-                    int nextColor = image.getPixel( nextPos.x, nextPos.y );
+                    int nowColor = _getColor( image, nowPos );
+                    int nextColor = _getColor( image, nextPos );
 
                     // 背景候補と比較
                     int back = background.get( background.size()-1 );
@@ -941,28 +1081,40 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     }
 
 
-    private Point posInLine( PointF start, PointF end, int x ){
+    private Point posInLine( PointF begin, PointF end, int x ){
         PointF d = new PointF();/* 二点間の距離 */
-        d.x = ( end.x > start.x ) ? end.x - start.x : start.x - end.x;
-        d.y = ( end.y > start.y ) ? end.y - start.y : start.y - end.y;
+        d.x = ( end.x > begin.x ) ? end.x - begin.x : begin.x - end.x;
+        d.y = ( end.y > begin.y ) ? end.y - begin.y : begin.y - end.y;
 
         PointF s = new PointF(); /* 二点の方向 */
-        s.x = ( end.x > start.x ) ? 1.0f : -1.0f;
-        s.y = ( end.y > start.y ) ? 1.0f : -1.0f;
+        s.x = ( end.x > begin.x ) ? 1.0f : -1.0f;
+        s.y = ( end.y > begin.y ) ? 1.0f : -1.0f;
 
         Point ret = new Point();
 
         if( d.x > d.y ){
-            ret.x = (int)(start.x + s.x*(float)x);
-            ret.y = (int)(start.y + s.y*d.y*((float)x/d.x) + 0.5);
+            ret.x = (int)( begin.x + s.x*(float)x );
+            ret.y = (int)( begin.y + s.y*d.y*((float)x/d.x) + 0.5 );
         } else {
-            ret.x = (int)(start.x + s.x*d.x*((double)x/d.y) + 0.5);
-            ret.y = (int)(start.y + s.y*(double)x);
+            ret.x = (int)( begin.x + s.x*d.x*((double)x/d.y) + 0.5 );
+            ret.y = (int)( begin.y + s.y*(double)x );
         }
 
         return ret;
     }
 
+
+    private int _getColor( Bitmap image, Point pos )
+    {
+        int ret;
+        try {
+            ret = image.getPixel( pos.x, pos.y );
+        } catch ( Exception e ) {
+            ret = Color.BLACK;
+        }
+
+        return ret;
+    }
 
     private void _circumscribedQuadrangle( double fineness )
     {
@@ -1069,50 +1221,50 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     }
 
 
-    private void _kMeans( ArrayList<Cluster> points, PointF[] _weightPoints, int k )
+    private void _kMeans( ArrayList<Cluster> points, PointF[] weightPoints, int k )
     {
         /*  変数宣言  */
         PointF[] weightHistory = new PointF[k];
 
         /*  初期化  */
-        for( int i=0; i<k; ++i ) _weightPoints[i] = new PointF(0.0f, 0.0f);
+        for( int i=0; i<k; ++i ) weightPoints[i] = new PointF( 0.0f, 0.0f );
 
         // とりあえず最大200回で打ち切る
         for( int l=0; l < 200; ++l ){
             // 現在の重心を保存
-            System.arraycopy( _weightPoints, 0, weightHistory, 0, k );
+            System.arraycopy( weightPoints, 0, weightHistory, 0, k );
 
             // 重心算出
             double[] count = new double[k];
             for( int i=0; i<k; ++i ) count[i] = 0.0;
 
             for( final Cluster c : points ){
-                _weightPoints[c.cluster].x += c.point.x;
-                _weightPoints[c.cluster].y += c.point.y;
+                weightPoints[c.cluster].x += c.point.x;
+                weightPoints[c.cluster].y += c.point.y;
                 count[c.cluster]++;
             }
 
             for( int i=0; i<k; ++i ){
                 if( count[i] > 0.0 ){
-                    _weightPoints[i].x /= count[i];
-                    _weightPoints[i].y /= count[i];
+                    weightPoints[i].x /= count[i];
+                    weightPoints[i].y /= count[i];
                 } else {
-                    _weightPoints[i].x = -1000.0f;
-                    _weightPoints[i].y = -1000.0f;
+                    weightPoints[i].x = -1000.0f;
+                    weightPoints[i].y = -1000.0f;
                 }
             }
 
             // 前回の重心と比較
-            if( _pointsComparison( _weightPoints, weightHistory, k ) ){
+            if( _pointsComparison( weightPoints, weightHistory, k ) ){
                 break;
             }
 
             // クラスター更新
             for( final Cluster c : points ){
-                double minDistance = _calculateDistance( c.point, _weightPoints[0] );
+                double minDistance = _calculateDistance( c.point, weightPoints[0] );
                 int minNum = 0;
-                for (int i = 1; i < k; ++i) {
-                    double dist = _calculateDistance( c.point, _weightPoints[i] );
+                for( int i=1; i<k; ++i ) {
+                    double dist = _calculateDistance( c.point, weightPoints[i] );
                     if( minDistance > dist ) {
                         minDistance = dist;
                         minNum = i;

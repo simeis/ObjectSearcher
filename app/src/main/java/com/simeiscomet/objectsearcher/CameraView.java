@@ -10,7 +10,6 @@ import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
 import android.hardware.Camera;
 import android.hardware.Camera.Size;
-import android.util.Log;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.Surface;
@@ -77,7 +76,7 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
             case Surface.ROTATION_180: degrees = 180; break;
             case Surface.ROTATION_270: degrees = 270; break;
         }
-        Log.d("Rotation", "Rotation:"+ rotation );
+        //Log.d("Rotation", "Rotation:"+ rotation );
 
         android.hardware.Camera.CameraInfo info = new android.hardware.Camera.CameraInfo();
         int result;
@@ -268,7 +267,7 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
             if( success == true ){
                 _camera.stopPreview();
                 _isShot = true;
-                Log.i( "shot", "complate" );
+                //Log.i( "shot", "complate" );
             }
             _isTake = false;
         }
