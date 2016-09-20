@@ -452,6 +452,13 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             return;
         }
 
+        HttpMultiPart httpPost = new HttpMultiPart();
+        if( httpPost.sendData( _context.getString(R.string.image_post_url), dir, fileName ) ){
+            Toast.makeText( _context, "画像の送信に成功しました", Toast.LENGTH_SHORT ).show();
+        } else {
+            Toast.makeText( _context, "画像の送信に失敗しました", Toast.LENGTH_SHORT ).show();
+        }
+
         try {
             _tmpImageDelete( dir, fileName, image );
         } catch ( NullPointerException e1 ){
