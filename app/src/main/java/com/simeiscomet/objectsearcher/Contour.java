@@ -1,6 +1,7 @@
 package com.simeiscomet.objectsearcher;
 
 import android.content.Context;
+import android.content.DialogInterface;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -11,22 +12,24 @@ import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
+import android.os.AsyncTask;
+import android.support.v7.app.AlertDialog;
 import android.util.Log;
 import android.view.Display;
+import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.ImageView;
 import android.widget.Toast;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * Created by NKJ on 2016/07/27.
@@ -36,31 +39,31 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     private final int MAX_CLUSTER = 3;
     private final double MIN_DISTANCE = 10.0;
     private final double MAX_DISTANCE = 120.0;
+    private final int MAX_THREAD_NUM = 10;
 
     private enum Mode{
         WAITING,
         DRAGGING,
         FINISHED,
+        PROCESSING,
         SELECTED
     }
-
-    Mode _mode = Mode.WAITING;
 
     private Context _context;
 
     private SurfaceHolder _holder;
-    
+
     private Display _display;
 
     private CameraView _camView;
-    
+
     private ArrayList<PointF> _points = new ArrayList<>();
     private boolean _isTouch = false;
-    
+
     private PointF _center = new PointF();
     private double _angle = 0.0;
     private PointF[] _cornerPos = new PointF[4];
-    
+
     private ArrayList<Cluster> _midPoints = new ArrayList<>();
     private PointF[] _weightPoints = new PointF[MAX_CLUSTER];
     private ArrayList<Point> _lineSegment = new ArrayList<>();
@@ -68,7 +71,11 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     //private PointF _ratio = new PointF();
 
     private Bitmap _object = null;
-    
+
+    private Rect _objectRect;
+
+    private Mode _mode = Mode.WAITING;
+
     public Contour( Context context, CameraView camView )
     {
         super( context );
@@ -110,6 +117,9 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
     public boolean drawContour( View v, MotionEvent event )
     {
+        if( _mode == Mode.PROCESSING )
+            return true;
+
         if( event.getPointerCount() >= 2 ){
             _points.clear();
             _clearCanvas();
@@ -235,6 +245,9 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
     private void _doDraw()
     {
+        if( _mode == Mode.PROCESSING )
+            return;
+
         Canvas canvas = _holder.lockCanvas();
         if( canvas != null ){
             Paint paint = new Paint();
@@ -278,42 +291,147 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         Canvas canvas = _holder.lockCanvas();
         canvas.drawColor( Color.TRANSPARENT, PorterDuff.Mode.CLEAR );
         // 描画処理...
-        _holder.unlockCanvasAndPost( canvas );
+        _holder.unlockCanvasAndPost(canvas);
     }
 
 
     private void _objectExtraction()
     {
-        Matrix matrix = _generateMatrix();
-        Bitmap bitmap = Bitmap.createBitmap( _camView.getBitmap(), 0, 0, _camView.getPrevWidth(), _camView.getPrevHeight(), matrix, false );
+        final String[] progressMessage = { "画像取得", "画像変換", "輪郭座標の変換", "輪郭の最適化", "頂点の検証", "輪郭座標の変換", "描画の更新", "輪郭座標の変換", "射影変換行列の算出", "射影変換", "スムージング", "画像変換", "輪郭座標の変換", "完了" };
 
-        PointF ratio = _calculateRatio();
-        PointF invRatio = new PointF( 1.0f/ratio.x, 1.0f/ratio.y );
+        _mode = Mode.PROCESSING;
 
-        _movePoint( _points, invRatio );
+        new ImageProcessingAsync<Boolean>( _context, progressMessage, 0 ){
+            @Override
+            protected Boolean doTask() throws Exception
+            {
+                // 画像取得
+                Matrix matrix = _generateMatrix();
+                Bitmap bitmap = Bitmap.createBitmap( _camView.getBitmap() );
+                publishProgress();
 
-        // 輪郭移動
-        _circumscribedQuadrangle( 0.1 );
-        _fitTheContour( bitmap );
-        _circumscribedQuadrangle( 0.1 );
+                // 画像変換
+                int[] intImage = _bitmap2Int(bitmap);
+                publishProgress();
 
-        // 物体画像抽出
-        _object = _objectImageExtraction( bitmap );
+                // 輪郭座標の変換
+                PointF ratio = _calculateRatio();
+                PointF invRatio = new PointF( 1.0f/ratio.x, 1.0f/ratio.y );
 
-        if( _object == null ){
-            _points.clear();
-            _clearCanvas();
-            _mode = Mode.WAITING;
-            return;
-        }
+                _movePoint( _points, invRatio );
+                publishProgress();
 
-        _sendImage( _object );
+                // 輪郭の最適化
+                _circumscribedQuadrangle( 0.1 );
+                _fitTheContour( intImage );
+                _circumscribedQuadrangle( 0.1 );
+                publishProgress();
 
-        _movePoint( _points, ratio );
-        _movePoint( _cornerPos, ratio, 4 );
-        _movePoint( _weightPoints, ratio, MAX_CLUSTER );
+                // 頂点の検証
+                if( !_processing4Corner() ){
+                    throw new RuntimeException("輪郭が細すぎます");
+                }
+                publishProgress();
 
-        _mode = Mode.SELECTED;
+                // 輪郭座標の変換
+                _movePoint( _points, ratio );
+                _movePoint( _cornerPos, ratio, 4 );
+                _movePoint( _weightPoints, ratio, MAX_CLUSTER );
+                _mode = Mode.FINISHED;
+                publishProgress();
+
+                // 描画の更新
+                _doDraw();
+                publishProgress();
+
+                // 輪郭座標の変換
+                _movePoint( _points, invRatio);
+                _movePoint( _cornerPos, invRatio, 4 );
+                _movePoint( _weightPoints, invRatio, MAX_CLUSTER );
+                _mode = Mode.PROCESSING;
+                publishProgress();
+
+                // 射影変換行列の算出
+                double[][] ptMatrix = _ptMatrixGenerate();
+                publishProgress();
+
+                // 射影変換
+                int[] ptImage = _projectiveTransformation( intImage, ptMatrix );
+                publishProgress();
+
+                // スムージング
+                int[] object = _bicubic( ptImage );
+                publishProgress();
+
+                // 画像変換
+                _object = _int2Bitmap( object );
+                publishProgress();
+
+                // 輪郭座標の変換
+                _movePoint( _points, ratio );
+                _movePoint( _cornerPos, ratio, 4 );
+                _movePoint( _weightPoints, ratio, MAX_CLUSTER );
+
+                _mode = Mode.SELECTED;
+                publishProgress();
+
+                return true;
+            }
+
+            @Override
+            protected void onFailure( Exception exception )
+            {
+                if( exception != null ) {
+                    Toast.makeText( _context, exception.getMessage(), Toast.LENGTH_SHORT ).show();
+                    Log.e("Error", exception.toString() );
+                }
+                _points.clear();
+                _clearCanvas();
+                _mode = Mode.WAITING;
+            }
+
+            @Override
+            protected void onSuccess( Boolean result )
+            {
+                if( _object == null ){
+                    _points.clear();
+                    _clearCanvas();
+                    _mode = Mode.WAITING;
+                    return;
+                }
+
+                _doDraw();
+
+                AlertDialog.Builder builder = new AlertDialog.Builder( _context )
+                        .setTitle("この画像を送信します")
+                        .setMessage("送信された画像はデータベースに保存され、\n自己組織化マップの学習や検証などに使用されます")
+                        .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which)
+                            {
+                                _sendImage( _object );
+                            }
+                        }).setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                _points.clear();
+                                _clearCanvas();
+                                _mode = Mode.WAITING;
+                            }
+                        });
+                final AlertDialog dialog = builder.create();
+                LayoutInflater inflater = LayoutInflater.from(_context);
+                View alertDialog = inflater.inflate(R.layout.alert_dialog, null);
+                final ImageView imageView = (ImageView)alertDialog.findViewById(R.id.dialogImage);
+                dialog.setView(alertDialog);
+
+                imageView.setImageBitmap(_object);
+                imageView.setScaleType(ImageView.ScaleType.FIT_XY);
+                imageView.setAdjustViewBounds(true);
+
+                dialog.show();
+            }
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
 
@@ -340,6 +458,26 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     }
 
 
+    private int[] _bitmap2Int( Bitmap image )
+    {
+        int[] ret = new int[image.getWidth()*image.getHeight()];
+        IntBuffer tmp = IntBuffer.wrap(ret);
+        image.copyPixelsToBuffer(tmp);
+
+        return ret;
+    }
+
+
+    private Bitmap _int2Bitmap( int[] image )
+    {
+        IntBuffer tmp = IntBuffer.wrap(image);
+
+        Bitmap ret = Bitmap.createBitmap(_objectRect.width(), _objectRect.height(), Bitmap.Config.ARGB_8888);
+        ret.copyPixelsFromBuffer(tmp);
+
+        return ret;
+    }
+
     private PointF _calculateRatio()
     {
         //Log.d("prev", "w"+ _camView.getPrevWidth());
@@ -349,8 +487,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
         PointF ret = new PointF( 1.0f, 1.0f );
 
-        float prevLong = Math.max( _camView.getPrevWidth(), _camView.getPrevHeight() );
-        float prevShort = Math.min( _camView.getPrevWidth(), _camView.getPrevHeight() );
+        float prevLong = Math.max(_camView.getPrevWidth(), _camView.getPrevHeight());
+        float prevShort = Math.min(_camView.getPrevWidth(), _camView.getPrevHeight());
 
         switch( _camView.getRotate() ){
             case Surface.ROTATION_0:
@@ -417,109 +555,52 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     }
 
 
-    private Bitmap _objectImageExtraction( Bitmap bitmap )
+    private boolean _processing4Corner()
     {
-        Bitmap object;
+        PointF tmp = _cornerPos[0];
+        System.arraycopy( _cornerPos, 1, _cornerPos, 0, 3 );
+        _cornerPos[3] = tmp;
 
-        try {
-            object = _projectiveTransformation(bitmap);
-        } catch( Exception e ) {
-            Log.e("P.T. Error", e.getMessage());
-            Toast.makeText( _context, "輪郭が細すぎます", Toast.LENGTH_SHORT ).show();
-            return null;
+        if( _cornerPos[0].x > _cornerPos[1].x ) {
+            tmp = _cornerPos[0];
+            _cornerPos[0] = _cornerPos[2];
+            _cornerPos[2] = tmp;
+
+            tmp = _cornerPos[1];
+            _cornerPos[1] = _cornerPos[3];
+            _cornerPos[3] = tmp;
         }
 
-        return object;
+        _objectRect = new Rect( 0, 0, (int)_calculateDistance( _cornerPos[0], _cornerPos[1] ), (int)_calculateDistance( _cornerPos[0], _cornerPos[3] ) );
+        return !( _objectRect.width() <= 10 || _objectRect.height() <= 10 );
     }
 
 
-    private void _sendImage( Bitmap image )
-    {
-        // cashフォルダを指定
-        File dir = _context.getCacheDir();
-
-        String fileName = "objectsearcher_cashimage.png";
-
-        try {
-            _tmpImageSave( dir, fileName, image );
-        } catch ( FileNotFoundException e1 ){
-            Log.e("Error", "" + e1.toString() );
-            Toast.makeText( _context, "一時ファイルの作成に失敗しました", Toast.LENGTH_SHORT ).show();
-            return;
-        } catch ( IOException e2 ){
-            Log.e("Error", "" + e2.toString());
-            Toast.makeText( _context, "一時ファイルの切り離しに失敗しました", Toast.LENGTH_SHORT ).show();
-            return;
-        }
-
-        HttpMultiPart httpPost = new HttpMultiPart();
-        if( httpPost.sendData( _context.getString(R.string.image_post_url), dir, fileName ) ){
-            Toast.makeText( _context, "画像の送信に成功しました", Toast.LENGTH_SHORT ).show();
-        } else {
-            Toast.makeText( _context, "画像の送信に失敗しました", Toast.LENGTH_SHORT ).show();
-        }
-
-        try {
-            _tmpImageDelete( dir, fileName, image );
-        } catch ( NullPointerException e1 ){
-            Log.e("Error", "" + e1.toString() );
-            Toast.makeText( _context, "一時ファイルの削除に失敗しました", Toast.LENGTH_SHORT ).show();
-            return;
-        } catch ( SecurityException e2 ){
-            Log.e("Error", "" + e2.toString());
-            Toast.makeText( _context, "一時ファイルへのアクセスに失敗しました", Toast.LENGTH_SHORT ).show();
-            return;
+    private void _sendImage( Bitmap image ){
+        try{
+            new HttpPostAsync( _context, _context.getString( R.string.image_post_url ), image ).execute();
+        } catch ( RuntimeException e ){
+            Log.e("Error", "" + e.toString() );
         }
     }
 
 
-    private void _tmpImageSave( File dir, String fileName, Bitmap image ) throws FileNotFoundException, IOException
-    {
-        // 保存処理開始
-        FileOutputStream fos = null;
-        fos = new FileOutputStream( new File( dir, fileName ) );
-
-        // jpegで保存
-        image.compress( Bitmap.CompressFormat.PNG, 100, fos );
-
-        // 保存処理終了
-        fos.close();
-    }
-
-
-    private void _tmpImageDelete( File dir, String fileName, Bitmap image ) throws NullPointerException, SecurityException
-    {
-        // 削除処理開始
-        File f = null;
-        f = new File( dir, fileName );
-
-        // 削除
-        f.delete();
-    }
-
-    private Bitmap _projectiveTransformation( Bitmap image )
+    private double[][] _ptMatrixGenerate()
     {
         /*  変数宣言  */
-        // 画像の幅
-        Rect rect = new Rect( 0, 0, (int)_calculateDistance( _cornerPos[0], _cornerPos[1] ), (int)_calculateDistance( _cornerPos[0], _cornerPos[3] ) );
-
-        if( rect.width() <= 10 || rect.height() <= 10 ) {
-            throw new RuntimeException("Contour size is minimum.");
-        }
-
         /*  行列作成  */
         // 行列A
-        double[][] matA = { { 0,             0,              1,  0,             0,              0,  0,                                0                                },
-                             { 0,             0,              0,  0,             0,              1,  0,                                0                                },
+        double[][] matA = { { 0,                      0,                       1,  0,                      0,                       0,  0,                                        0                                        },
+                             { 0,                      0,                       0,  0,                      0,                       1,  0,                                        0                                        },
 
-                             { rect.width(),  0,              1,  0,             0,              0,  -rect.width()*_cornerPos[1].x,  0                                },
-                             { 0,             0,              0,  rect.width(),  0,              1,  -rect.width()*_cornerPos[1].y,  0                                },
+                             { _objectRect.width(),  0,                       1,  0,                      0,                       0,  -_objectRect.width()*_cornerPos[1].x,  0                                        },
+                             { 0,                      0,                       0,  _objectRect.width(),  0,                       1,  -_objectRect.width()*_cornerPos[1].y,  0                                        },
 
-                             { rect.width(),  rect.height(),  1,  0,             0,              0,  -rect.width()*_cornerPos[2].x,  -rect.height()*_cornerPos[2].x },
-                             { 0,             0,              0,  rect.width(),  rect.height(),  1,  -rect.width()*_cornerPos[2].y,  -rect.height()*_cornerPos[2].y },
+                             { _objectRect.width(),  _objectRect.height(),  1,  0,                      0,                       0,  -_objectRect.width()*_cornerPos[2].x,  -_objectRect.height()*_cornerPos[2].x },
+                             { 0,                      0,                       0,  _objectRect.width(),  _objectRect.height(),  1,  -_objectRect.width()*_cornerPos[2].y,  -_objectRect.height()*_cornerPos[2].y },
 
-                             { 0,             rect.height(),  1,  0,             0,              0,  0,                                -rect.height()*_cornerPos[3].x },
-                             { 0,             0,              0,  0,             rect.height(),  1,  0,                                -rect.height()*_cornerPos[3].y } };
+                             { 0,                      _objectRect.height(),  1,  0,                      0,                       0,  0,                                        -_objectRect.height()*_cornerPos[3].x },
+                             { 0,                      0,                       0,  0,                      _objectRect.height(),  1,  0,                                        -_objectRect.height()*_cornerPos[3].y } };
 
         // 列ベクトルB
         double[][] matB = { { _cornerPos[0].x }, { _cornerPos[0].y },
@@ -535,186 +616,17 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         Matrix2D matX = Matrix2D.mult( invA, new Matrix2D( matB ) );
 
         double[][] dMatX;
-        if( matX.getArrays() != null ) {
+        try {
             dMatX = matX.getArrays();
-        } else {
+        } catch( NullPointerException e ) {
             throw new RuntimeException("Matrix is NULL.");
         }
 
-        // 画像生成
-        Bitmap object;
-        object = Bitmap.createBitmap( rect.width(), rect.height(), Bitmap.Config.ARGB_8888 );//cvCreateImage( cvSize( rect.width, rect.height ), image.storedImage.depth, image.storedImage.nChannels );
-
-
-        // 画像情報
-        //int iStep = image.storedImage.widthStep;
-        //int oStep = object.storedImage.widthStep;
-        //int channel = object.storedImage.nChannels;
-
-        // バイキュービック（http://www7a.biglobe.ne.jp/~fairytale/article/program/graphics.html）
-        double a = -1.0;
-
-        double parameter[] = { a + 2.0, a + 3.0, a * 5.0, a * 8.0, a * 4.0 };
-
-        Rect preSize = new Rect( 0, 0, rect.width()+3, rect.height()+3 );
-        Bitmap preImage = Bitmap.createBitmap(preSize.width(), preSize.height(), Bitmap.Config.ARGB_8888);
-
-        // 変換画像上をラスタ走査
-        for( int i=-1; i<rect.height()+2; ++i ) {
-            for( int j=-1; j<rect.width()+2; ++j ) {
-                // 変換前の座標を算出
-                PointF pos = new PointF( (float)(((double)j*dMatX[0][0] + (double)i*dMatX[1][0] + dMatX[2][0] ) / ( (double)j*dMatX[3][0] + (double)i*dMatX[7][0] + 1.0 )),
-                                         (float)(((double)j*dMatX[3][0] + (double)i*dMatX[4][0] + dMatX[5][0] ) / ( (double)j*dMatX[3][0] + (double)i*dMatX[7][0] + 1.0 )) );
-
-                Point base = new Point( (int)pos.x, (int)pos.y );
-
-                if( 1.0 <= pos.x && pos.x <= image.getWidth() - 2.0 && 1.0 <= pos.y && pos.y <= image.getHeight() - 2.0 ){
-                    // RGB毎に変数を用意しておく
-                    int insertR = 0;
-                    int insertG = 0;
-                    int insertB = 0;
-
-                    // 基点の周辺16画素を取得して処理
-                    for (int x=-1; x<=2; x++) {
-                        for (int y=-1; y<=2; y++) {
-                            // 実際に処理する画素を設定
-                            Point current = new Point( base.x + x, base.y + y );
-
-                            // 距離決定
-                            PointF dist = new PointF( Math.abs(current.x - pos.x), Math.abs(current.y - pos.y) );
-
-                            // 重み付け
-                            double weight = 0.0;  // 重み変数
-
-                            // まずはX座標の距離で重みを設定
-                            // 1以下、2以下のとき、それぞれ重み付け
-                            if( dist.x <= 1.0 ){
-                                weight = parameter[0] * dist.x*dist.x*dist.x - parameter[1] * dist.x*dist.x + 1.0;
-                            }
-                            else if( dist.x <= 2.0 ){
-                                weight = a*dist.x*dist.x*dist.x - parameter[2] * dist.x*dist.x + parameter[3] * dist.x - parameter[4];
-                            }
-                            else {
-                                continue;  // 何も処理しないので、次のループへ
-                            }
-
-                            // Y座標の距離で重みを設定
-                            if( dist.y <= 1.0 ){
-                                weight *= parameter[0] * dist.y*dist.y*dist.y - parameter[1] * dist.y*dist.y + 1.0;
-                            }
-                            else if( dist.y <= 2.0 ){
-                                weight *= a*dist.y*dist.y*dist.y - parameter[2] * dist.y*dist.y + parameter[3] * dist.y - parameter[4];
-                            }
-                            else {
-                                continue;
-                            }
-
-                            // 実際に画素を取得
-                            int colorProcess = Color.BLACK;
-                            if( current.x >= 0 || current.y >= 0 || current.x <= rect.width()-1 || current.y <= rect.height()-1 ){
-                                colorProcess = _getColor( image, current );
-                            }
-
-                            // 画素をRGB分割し、重みをかけて足し合わせる
-                            insertR += ( Color.red( colorProcess ) * weight );
-                            insertG += ( Color.green( colorProcess ) * weight );
-                            insertB += ( Color.blue( colorProcess ) * weight );
-                        }
-                    }
-
-                    if( insertR < 0 ) insertR = 0; if( insertR > 255 ) insertR = 255;
-                    if( insertG < 0 ) insertG = 0; if( insertG > 255 ) insertG = 255;
-                    if( insertB < 0 ) insertB = 0; if( insertB > 255 ) insertB = 255;
-
-                    preImage.setPixel( j+1, i+1, Color.rgb( insertR, insertG, insertB ) );
-
-                    continue;
-                }
-
-                // 格納
-                preImage.setPixel( j+1, i+1, Color.BLACK );
-
-            }
-        }
-
-        // 変換画像上をラスタ走査
-        for( int i=0; i<rect.height(); ++i ) {
-            for( int j=0; j<rect.width(); ++j ) {
-                // 変換前の座標を算出
-                PointF pos = new PointF( j+1, i+1 );
-
-                Point base = new Point( (int)pos.x, (int)pos.y );
-
-                if( 1.0 <= pos.x && pos.x <= preSize.width() - 2.0 && 1.0 <= pos.y && pos.y <= preSize.height() - 2.0 ){
-                    // RGB毎に変数を用意しておく
-                    int insertR = 0;
-                    int insertG = 0;
-                    int insertB = 0;
-
-                    // 基点の周辺16画素を取得して処理
-                    for (int x=-1; x<=2; x++) {
-                        for (int y=-1; y<=2; y++) {
-                            // 実際に処理する画素を設定
-                            Point current = new Point( base.x + x, base.y + y );
-
-                            // 距離決定
-                            PointF dist = new PointF( Math.abs( current.x - pos.x ), Math.abs( current.y - pos.y ) );
-
-                            // 重み付け
-                            double weight = 0.0;  // 重み変数
-
-                            // まずはX座標の距離で重みを設定
-                            // 1以下、2以下のとき、それぞれ重み付け
-                            if( dist.x <= 1.0 ){
-                                weight = parameter[0] * dist.x*dist.x*dist.x - parameter[1] * dist.x*dist.x + 1.0;
-                            }
-                            else if( dist.x <= 2.0 ){
-                                weight = a*dist.x*dist.x*dist.x - parameter[2] * dist.x*dist.x + parameter[3] * dist.x - parameter[4];
-                            }
-                            else {
-                                continue;  // 何も処理しないので、次のループへ
-                            }
-
-                            // Y座標の距離で重みを設定
-                            if( dist.y <= 1.0 ){
-                                weight *= parameter[0] * dist.y*dist.y*dist.y - parameter[1] * dist.y*dist.y + 1.0;
-                            }
-                            else if( dist.y <= 2.0 ){
-                                weight *= a*dist.y*dist.y*dist.y - parameter[2] * dist.y*dist.y + parameter[3] * dist.y - parameter[4];
-                            }
-                            else {
-                                continue;
-                            }
-
-                            // 実際に画素を取得
-                            int colorProcess = _getColor(preImage, current);
-
-                            // 画素をRGB分割し、重みをかけて足し合わせる
-                            insertR += ( Color.red( colorProcess ) * weight );
-                            insertG += ( Color.green(colorProcess) * weight );
-                            insertB += ( Color.blue(colorProcess) * weight );
-                        }
-                    }
-
-                    if( insertR < 0 ) insertR = 0; if( insertR > 255 ) insertR = 255;
-                    if( insertG < 0 ) insertG = 0; if( insertG > 255 ) insertG = 255;
-                    if( insertB < 0 ) insertB = 0; if( insertB > 255 ) insertB = 255;
-
-                    object.setPixel( j, i, Color.rgb( insertR, insertG, insertB ) );
-
-                    continue;
-                }
-
-                // 格納
-                object.setPixel(j, i, Color.BLACK );
-            }
-        }
-
-        return object;
+        return dMatX;
     }
 
 
-    private void _fitTheContour( Bitmap image )
+    private void _fitTheContour( int[] image )
     {
         _midPoints.clear();
 
@@ -908,7 +820,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     //Log.d("GetPixPos", "x:"+ pos.x );
                     //Log.d("GetPixPos", "y:"+ pos.y );
 
-                    int tmp = _getColor(image, pos);
+                    int tmp = image[pos.y*_camView.getPrevWidth() + pos.x];
 
                     r += Color.red( tmp );
                     g += Color.green( tmp );
@@ -964,8 +876,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     Point nowPos = posInLine( nearestPointF, _points.get( k ), i );
                     Point nextPos = posInLine( nearestPointF, _points.get( k ), i-1 );
 
-                    int nowColor = _getColor( image, nowPos );
-                    int nextColor = _getColor( image, nextPos );
+                    int nowColor = image[nowPos.y*_camView.getPrevWidth() + nowPos.x];
+                    int nextColor = image[nextPos.y*_camView.getPrevWidth() + nowPos.x];
 
                     // 背景候補と比較
                     int back = background.get( background.size()-1 );
@@ -984,13 +896,13 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     final double range = 80.0;
 
                     if( _colorDistance( nowColor, back ) < range ||
-                        _colorDistance( nowColor, current ) < range ||
-                        _colorDistance( nowColor, front ) < range ){
+                            _colorDistance( nowColor, current ) < range ||
+                            _colorDistance( nowColor, front ) < range ){
                         nowBackground = true;
                     }
                     if( _colorDistance( nextColor, back ) >= range ||
-                        _colorDistance( nextColor, current ) >= range ||
-                        _colorDistance( nextColor, front ) >= range ){
+                            _colorDistance( nextColor, current ) >= range ||
+                            _colorDistance( nextColor, front ) >= range ){
                         nextObject = true;
                     }
 
@@ -1048,6 +960,391 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     }
 
 
+    private int[] _projectiveTransformation( final int[] image, final double[][] matrix )
+    {
+        /*  変数宣言  */
+        // 画像の幅
+        Rect preSize = new Rect( 0, 0, _objectRect.width()+6, _objectRect.height()+6 );
+
+        // 画像生成
+        final int[] xImage = new int[_camView.getPrevWidth()*_camView.getPrevHeight()];
+
+        final int interval1 = (int)Math.ceil( (double)preSize.height()/(double)MAX_THREAD_NUM );
+
+        final int threadNum1 = (int)Math.ceil( (double)preSize.height()/(double)interval1 );
+        final CountDownLatch latch1 = new CountDownLatch( threadNum1 );
+
+        // マルチスレッド処理
+        for( int i=0; i<threadNum1; ++i ){
+            final int start = interval1*i-2;
+            final int end = Math.min( interval1*(i+1)-2, preSize.height()-2 );
+
+            new ImageProcessingAsync<Boolean>( _context ){
+                @Override
+                protected Boolean doTask() throws Exception
+                {
+                    _splitProjectiveTransformationX( xImage, image, matrix, start, end );
+                    return true;
+                }
+
+                @Override
+                protected void onFailure( Exception exception ){}
+
+                @Override
+                protected void onSuccess( Boolean result )
+                {
+                    latch1.countDown();
+                }
+            }.executeOnExecutor( AsyncTask.THREAD_POOL_EXECUTOR );
+        }
+
+        try {
+            latch1.await();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        preSize = new Rect( 0, 0, _objectRect.width()+3, _objectRect.height()+3 );
+
+        final int[] preImage = new int[preSize.width()*preSize.height()];
+
+        final int interval2 = (int)Math.ceil( (double)preSize.height()/(double)MAX_THREAD_NUM );
+
+        final int threadNum2 = (int)Math.ceil( (double)preSize.height()/(double)interval2 );
+        final CountDownLatch latch2 = new CountDownLatch( threadNum2 );
+
+        // マルチスレッド処理
+        for( int i=0; i<threadNum2; ++i ){
+            final int start = interval2*i-1;
+            final int end = Math.min( interval2*(i+1)-1, preSize.height()-1 );
+
+            new ImageProcessingAsync<Boolean>( _context ){
+                @Override
+                protected Boolean doTask() throws Exception
+                {
+                    _splitProjectiveTransformation( preImage, xImage, matrix, start, end );
+                    return true;
+                }
+
+                @Override
+                protected void onFailure( Exception exception ){}
+
+                @Override
+                protected void onSuccess( Boolean result )
+                {
+                    latch2.countDown();
+                }
+            }.executeOnExecutor( AsyncTask.THREAD_POOL_EXECUTOR );
+        }
+
+        try {
+            latch2.await();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        return preImage;
+    }
+
+
+    private int[] _bicubic( final int[] image )
+    {
+        // 画像の幅
+        Rect preSize = new Rect( 0, 0, _objectRect.width()+3, _objectRect.height()+3 );
+
+        // 画像生成
+        final int[] xImage = new int[_objectRect.width()*preSize.height()];
+
+        final int interval1 = (int)Math.ceil( (double)preSize.height()/(double)MAX_THREAD_NUM );
+
+        final int threadNum1 = (int)Math.ceil( (double)preSize.height()/(double)interval1 );
+        final CountDownLatch latch1 = new CountDownLatch( threadNum1 );
+
+        // 変換画像上をラスタ走査
+        for( int i=0; i<threadNum1; ++i ){
+            final int start = interval1*i-1;
+            final int end = Math.min( interval1*(i+1)-1, preSize.height()-1 );
+
+            new ImageProcessingAsync<Boolean>( _context ){
+                @Override
+                protected Boolean doTask() throws Exception
+                {
+                    _splitBicubicX( xImage, image, start, end );
+                    return true;
+                }
+
+                @Override
+                protected void onFailure( Exception exception ){}
+
+                @Override
+                protected void onSuccess( Boolean result )
+                {
+                    latch1.countDown();
+                }
+            }.executeOnExecutor( AsyncTask.THREAD_POOL_EXECUTOR );
+        }
+
+        try {
+            latch1.await();
+        } catch ( InterruptedException e ) {
+            e.printStackTrace();
+        }
+
+        final int[] object = new int[_objectRect.width()*_objectRect.height()];
+
+        final int interval2 = (int)Math.ceil( (double)_objectRect.height()/(double)MAX_THREAD_NUM );
+
+        final int threadNum2 = (int)Math.ceil( (double)_objectRect.height()/(double)interval2 );
+        final CountDownLatch latch2 = new CountDownLatch( threadNum2 );
+
+        // 変換画像上をラスタ走査
+        for( int i=0; i<threadNum2; ++i ){
+            final int start = interval2*i;
+            final int end = Math.min( interval2*(i+1), _objectRect.height() );
+
+            new ImageProcessingAsync<Boolean>( _context ){
+                @Override
+                protected Boolean doTask() throws Exception
+                {
+                    _splitBicubic( object, xImage, start, end );
+                    return true;
+                }
+
+                @Override
+                protected void onFailure( Exception exception ){}
+
+                @Override
+                protected void onSuccess( Boolean result )
+                {
+                    latch2.countDown();
+                }
+            }.executeOnExecutor( AsyncTask.THREAD_POOL_EXECUTOR );
+        }
+
+        try {
+            latch2.await();
+        } catch ( InterruptedException e ) {
+            e.printStackTrace();
+        }
+
+        return object;
+    }
+
+
+    private void _splitProjectiveTransformationX( int[] xImage, int[] image, double[][] matrix, int start, int end )
+    {
+        /*  変数宣言  */
+        // 画像の幅
+        Rect preSize = new Rect( 0, 0, _objectRect.width()+6, _objectRect.height()+6 );
+
+        // バイキュービック http://www7a.biglobe.ne.jp/~fairytale/article/program/graphics.html
+        //                  http://www.rainorshine.asia/2013/12/13/post2497.html
+        for( int i=start; i<end; ++i ) {
+            for( int j=-2; j<_objectRect.width()+4; ++j ) {
+                // 変換前の座標を算出
+                PointF pos = new PointF( (float)(((double)j*matrix[0][0] + (double)i*matrix[1][0] + matrix[2][0] ) / ( (double)j*matrix[6][0] + (double)i*matrix[7][0] + 1.0 )),
+                                         (float)(((double)j*matrix[3][0] + (double)i*matrix[4][0] + matrix[5][0] ) / ( (double)j*matrix[6][0] + (double)i*matrix[7][0] + 1.0 )) );
+
+                Point base = new Point( (int)pos.x, (int)pos.y );
+
+                if( 1.0 > pos.x || pos.x > _camView.getPrevWidth() - 2.0 || 1.0 > pos.y || pos.y > _camView.getPrevHeight() - 2.0 ){
+                    // 格納
+                    //xImage[base.y*_camView.getPrevWidth() + base.x] = Color.BLACK;
+                    continue;
+                }
+
+                // RGB毎に変数を用意しておく
+                int insertR = 0;
+                int insertG = 0;
+                int insertB = 0;
+
+                // 基点の周辺16画素を取得して処理
+                for (int x=-1; x<=2; x++) {
+                    // 実際に処理する画素を設定
+                    Point current = new Point( base.x + x, base.y );
+
+                    // 距離決定
+                    double dist = Math.abs( current.x - pos.x );
+
+                    // 重み付け
+                    double weight =  _weightCalc( dist );
+
+                    // 実際に画素を取得
+                    int colorProcess = Color.BLACK;
+                    if( current.x >= 0 || current.x <= _camView.getPrevWidth()-1 ){
+                        colorProcess = image[current.y*_camView.getPrevWidth() + current.x];
+                    }
+
+                    // 画素をRGB分割し、重みをかけて足し合わせる
+                    insertR += ( Color.red( colorProcess ) * weight );
+                    insertG += ( Color.green( colorProcess ) * weight );
+                    insertB += ( Color.blue( colorProcess ) * weight );
+                }
+
+                xImage[base.y*_camView.getPrevWidth() + base.x] = Color.rgb( insertR, insertG, insertB );
+            }
+        }
+    }
+
+
+    private void _splitProjectiveTransformation( int[] preImage, int[] xImage, double[][] matrix, int start, int end )
+    {
+        /*  変数宣言  */
+        // 画像の幅
+        Rect preSize = new Rect( 0, 0, _objectRect.width()+3, _objectRect.height()+3 );
+
+        // バイキュービック http://www7a.biglobe.ne.jp/~fairytale/article/program/graphics.html
+        //                  http://www.rainorshine.asia/2013/12/13/post2497.html
+        for( int i=start; i<end; ++i ) {
+            for( int j=-1; j<_objectRect.width()+2; ++j ) {
+                // 変換前の座標を算出
+                PointF pos = new PointF( (float)(((double)j*matrix[0][0] + (double)i*matrix[1][0] + matrix[2][0] ) / ( (double)j*matrix[6][0] + (double)i*matrix[7][0] + 1.0 )),
+                                          (float)(((double)j*matrix[3][0] + (double)i*matrix[4][0] + matrix[5][0] ) / ( (double)j*matrix[6][0] + (double)i*matrix[7][0] + 1.0 )) );
+
+                Point base = new Point( (int)pos.x, (int)pos.y );
+
+                if( 1.0 > pos.x || pos.x > _camView.getPrevWidth() - 2.0 || 1.0 > pos.y || pos.y > _camView.getPrevHeight() - 2.0 ){
+                    // 格納
+                    preImage[(i+1)*preSize.width() + j+1] = Color.BLACK;
+                    continue;
+                }
+
+                // RGB毎に変数を用意しておく
+                int insertR = 0;
+                int insertG = 0;
+                int insertB = 0;
+
+                // 基点の周辺16画素を取得して処理
+                for (int y=-1; y<=2; y++) {
+                    // 実際に処理する画素を設定
+                    Point current = new Point( base.x, base.y + y );
+
+                    // 距離決定
+                    double dist = Math.abs( current.y - pos.y );
+
+                    // 重み付け
+                    double weight = _weightCalc( dist );
+
+                    // 実際に画素を取得
+                    int colorProcess = xImage[current.y*_camView.getPrevWidth() + current.x];
+
+                    // 画素をRGB分割し、重みをかけて足し合わせる
+                    insertR += ( Color.red( colorProcess ) * weight );
+                    insertG += ( Color.green( colorProcess ) * weight );
+                    insertB += ( Color.blue( colorProcess ) * weight );
+                }
+
+                if( insertR < 0 ) insertR = 0; if( insertR > 255 ) insertR = 255;
+                if( insertG < 0 ) insertG = 0; if( insertG > 255 ) insertG = 255;
+                if( insertB < 0 ) insertB = 0; if( insertB > 255 ) insertB = 255;
+
+                preImage[(i+1)*preSize.width() + j+1] = Color.rgb( insertR, insertG, insertB );
+            }
+        }
+    }
+
+
+    private void _splitBicubicX( int[] xImage, int[] image, int start, int end )
+    {
+        // 画像の幅
+        Rect preSize = new Rect( 0, 0, _objectRect.width()+3, _objectRect.height()+3 );
+
+        // バイキュービック http://www7a.biglobe.ne.jp/~fairytale/article/program/graphics.html
+        //                  http://www.rainorshine.asia/2013/12/13/post2497.html
+        for( int i=start; i<end; ++i ) {
+            for( int j=0; j<_objectRect.width(); ++j ) {
+                // 変換前の座標を算出
+                PointF pos = new PointF( j+1, i+1 );
+
+                Point base = new Point( (int)pos.x, (int)pos.y );
+
+                // RGB毎に変数を用意しておく
+                int insertR = 0;
+                int insertG = 0;
+                int insertB = 0;
+
+                // 基点の周辺16画素を取得して処理
+                for (int x=-1; x<=2; x++) {
+                    // 実際に処理する画素を設定
+                    Point current = new Point( base.x + x, base.y );
+
+                    // 距離決定
+                    double dist = Math.abs( current.x - pos.x );
+
+                    // 重み付け
+                    double weight = _weightCalc( dist );
+
+                    // 実際に画素を取得
+                    int colorProcess = image[current.y*preSize.width() + current.x];
+
+                    // 画素をRGB分割し、重みをかけて足し合わせる
+                    insertR += ( Color.red( colorProcess ) * weight );
+                    insertG += ( Color.green( colorProcess ) * weight );
+                    insertB += ( Color.blue( colorProcess ) * weight );
+                }
+
+                xImage[(i+1)*_objectRect.width() + j] = Color.rgb( insertR, insertG, insertB );
+            }
+        }
+    }
+
+    private void _splitBicubic( int[] object, int[] xImage, int start, int end )
+    {
+        // 画像の幅
+        Rect preSize = new Rect( 0, 0, _objectRect.width()+3, _objectRect.height()+3 );
+
+        // バイキュービック http://www7a.biglobe.ne.jp/~fairytale/article/program/graphics.html
+        //                  http://www.rainorshine.asia/2013/12/13/post2497.html
+        // 変換画像上をラスタ走査
+        for( int i=start; i<end; ++i ) {
+            for( int j=0; j<_objectRect.width(); ++j ) {
+                // 変換前の座標を算出
+                PointF pos = new PointF( j, i+1 );
+
+                Point base = new Point( (int)pos.x, (int)pos.y );
+
+                // RGB毎に変数を用意しておく
+                int insertR = 0;
+                int insertG = 0;
+                int insertB = 0;
+
+                // 基点の周辺16画素を取得して処理
+                for (int y=-1; y<=2; y++) {
+                    // 実際に処理する画素を設定
+                    Point current = new Point( base.x, base.y + y );
+
+                    // 距離決定
+                    double dist = Math.abs( current.y - pos.y );
+
+                    // 重み付け
+                    double weight = _weightCalc( dist );
+
+                    // 実際に画素を取得
+                    int colorProcess = xImage[current.y*_objectRect.width() + current.x];
+
+                    // 画素をRGB分割し、重みをかけて足し合わせる
+                    insertR += ( Color.red( colorProcess ) * weight );
+                    insertG += ( Color.green( colorProcess ) * weight );
+                    insertB += ( Color.blue( colorProcess ) * weight );
+                }
+
+                if( insertR < 0 ) insertR = 0; if( insertR > 255 ) insertR = 255;
+                if( insertG < 0 ) insertG = 0; if( insertG > 255 ) insertG = 255;
+                if( insertB < 0 ) insertB = 0; if( insertB > 255 ) insertB = 255;
+
+                object[i*_objectRect.width() + j] = Color.rgb( insertR, insertG, insertB );
+            }
+        }
+    }
+
+
+    private double _weightCalc( double d )
+    {
+        double a = -0.75;
+        return d <= 1.0 ? ((a + 2.0) * d * d * d) - ((a + 3.0) * d * d) + 1 :
+                d <= 2.0 ? (a * d * d * d) - (5.0 * a * d * d) + (8.0 * a * d) - (4.0 * a) : 0.0;
+    }
+
     private Point posInLine( PointF begin, PointF end, int x ){
         PointF d = new PointF();/* 二点間の距離 */
         d.x = ( end.x > begin.x ) ? end.x - begin.x : begin.x - end.x;
@@ -1094,15 +1391,15 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         /*  処理開始  */
         // 中点算出
         _center = new PointF( 0.0f, 0.0f );
-    
+
         for( final PointF p : _points ){
             _center.x += p.x;
             _center.y += p.y;
         }
-    
+
         _center.x /= (float)_points.size();
         _center.y /= (float)_points.size();
-    
+
         // 0°~180°まで指定された角度の細かさでループ
         for( double angle=0.0; angle<180.0; angle += fineness ){
             // 変数宣言
@@ -1115,10 +1412,10 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 PointF pos = new PointF( p.x, p.y );
                 double at = Math.atan2((double) (pos.y - _center.y), (double) (pos.x - _center.x));
                 at -= angle*Math.PI/180.0;
-    
+
                 // 距離
                 double distance = _calculateDistance( pos, _center ) * Math.sin( at );
-    
+
                 // 上側
                 if( distance >= 0.0 ){
                     if( upper < distance ){
@@ -1132,10 +1429,10 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     }
                 }
             }
-    
+
             // フェレ径を算出
             double ferreDiameter = upper - lower;
-    
+
             // フェレ径が最小
             if( minFerreDiameter > ferreDiameter ){
                 minFerreDiameter = ferreDiameter;
@@ -1144,19 +1441,19 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 minLowerDistance = -lower;
             }
         }
-    
+
         // 最小フェレ径に対応するフェレ径を算出
         {
             double upper = 0.0;
             double lower = 0.0;
-    
+
             for( final PointF p : _points ){
                 PointF pos = new PointF( p.x, p.y );
                 double at = Math.atan2( (double)( pos.y - _center.y ), (double)( pos.x - _center.x ) );
                 at -= (minAngle+90.0)*Math.PI/180.0;
-    
+
                 double distance = _calculateDistance( pos, _center ) * Math.sin(at);
-    
+
                 if( distance >= 0.0 ){
                     if( upper < distance ){
                         upper = distance;
@@ -1168,14 +1465,14 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     }
                 }
             }
-    
+
             maxUpperDistance = upper;
             maxLowerDistance = -lower;
         }
-    
+
         // 角度保存
         _angle = minAngle*Math.PI/180.0;
-    
+
         // 外接四角形の角の座標を算出
         _cornerPos[0] = new PointF( _center.x + (float)( Math.cos( _angle + Math.PI / 2.0 )*minUpperDistance + Math.cos( _angle + Math.PI )*maxUpperDistance ),
                                       _center.y + (float)( Math.sin( _angle + Math.PI / 2.0 )*minUpperDistance + Math.sin( _angle + Math.PI )*maxUpperDistance ) );
@@ -1254,7 +1551,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         return true;
     }
 
-    
+
     private boolean _intersectionDetermination( PointF a, PointF b, PointF c, PointF d )
     {
         /*  変数宣言  */
