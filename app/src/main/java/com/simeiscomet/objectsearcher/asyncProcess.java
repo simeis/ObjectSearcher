@@ -8,7 +8,7 @@ import android.os.AsyncTask;
 /**
  * Created by NKJ on 2016/09/21.
  */
-public abstract class ImageProcessingAsync<Result> extends AsyncTask<Void, Void, Result> implements DialogInterface.OnCancelListener {
+public abstract class asyncProcess<Result> extends AsyncTask<Void, Void, Result> implements DialogInterface.OnCancelListener {
     private Context _context;
     private ProgressDialog _dialog = null;
 
@@ -22,7 +22,7 @@ public abstract class ImageProcessingAsync<Result> extends AsyncTask<Void, Void,
     abstract protected void onSuccess(Result result);
     abstract protected void onFailure(Exception exception);
 
-    public ImageProcessingAsync( Context context0, String[] message0, int nowProgress )
+    public asyncProcess(Context context0, String[] message0, int nowProgress)
     {
         _context = context0;
         _maxProgress = message0.length-1;
@@ -30,7 +30,7 @@ public abstract class ImageProcessingAsync<Result> extends AsyncTask<Void, Void,
         _message = message0;
     }
 
-    public ImageProcessingAsync( Context context0 )
+    public asyncProcess(Context context0)
     {
         _context = context0;
         _maxProgress = -1;

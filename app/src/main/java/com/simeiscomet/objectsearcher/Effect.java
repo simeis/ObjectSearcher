@@ -1,8 +1,10 @@
 package com.simeiscomet.objectsearcher;
 
 import android.content.Context;
+import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.MaskFilter;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
@@ -19,7 +21,7 @@ import android.view.animation.DecelerateInterpolator;
 public class Effect extends SurfaceView implements SurfaceHolder.Callback
 {
     private final int DELAY = 10;
-    private final float LOOP = 80.0f;
+    private final float LOOP = 100.0f;
     private final float SKIP = 4.0f;
     private final float COUNT = 3.0f;
     private final float SPAN = LOOP/COUNT;
@@ -80,19 +82,30 @@ public class Effect extends SurfaceView implements SurfaceHolder.Callback
 
     private void _doDraw()
     {
+        final MaskFilter blur = new BlurMaskFilter( 2, BlurMaskFilter.Blur.NORMAL );
+
         Canvas canvas = _holder.lockCanvas();
         if( canvas != null ){
-            Paint paint = new Paint();
-            paint.setColor( Color.argb( 200, 0, 255, 0 ) );
-            paint.setStyle( Paint.Style.STROKE );
-            canvas.drawColor( Color.argb( 150, 0, 255, 0 ), PorterDuff.Mode.SRC_IN );
-
             if( _flag ){
+                final Paint paintGlow = new Paint();
+                paintGlow.setARGB( 50, 0, 255, 150 );
+                paintGlow.setStyle( Paint.Style.STROKE );
+                paintGlow.setStrokeWidth( 8 );
+                //paintGlow.setMaskFilter( blur );
+
+                final Paint paint = new Paint();
+                paint.setARGB( 170, 255, 255, 255 );
+                paint.setStyle( Paint.Style.STROKE );
+                paint.setStrokeWidth( 2 );
+
+                canvas.drawColor( Color.argb( 200, 255, 255, 255 ), PorterDuff.Mode.DST_IN );
+
                 DecelerateInterpolator intpr = new DecelerateInterpolator();
                 for( int i=0; i<COUNT; ++i ){
                     float f = (_frame+SPAN*i)%LOOP/LOOP;
                     float padding = canvas.getWidth() * intpr.getInterpolation( f ) / 5.0f + PADDING;
-                    canvas.drawRect(padding, padding, canvas.getWidth() - padding, canvas.getHeight() - padding, paint);
+                    canvas.drawRect( padding, padding, canvas.getWidth() - padding, canvas.getHeight() - padding, paintGlow );
+                    canvas.drawRect( padding, padding, canvas.getWidth() - padding, canvas.getHeight() - padding, paint );
                 }
             }
 

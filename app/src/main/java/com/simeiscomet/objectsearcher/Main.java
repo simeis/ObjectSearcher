@@ -1,10 +1,12 @@
 package com.simeiscomet.objectsearcher;
 
 import android.annotation.SuppressLint;
+import android.content.Context;
 import android.os.Bundle;
 import android.os.Handler;
 import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
@@ -98,7 +100,7 @@ public class Main extends AppCompatActivity {
         CONTOUR
     }
 
-    private Mode mMode = Mode.FOCUS;
+    private Mode _mode = Mode.FOCUS;
 
     @Override
     protected void onCreate( Bundle savedInstanceState )
@@ -109,6 +111,8 @@ public class Main extends AppCompatActivity {
         //getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
         setContentView( R.layout.activity_main );
+
+        final Context context = this;
 
         mVisible = true;
         //mControlsView = findViewById(R.id.fullscreen_content_controls);
@@ -122,37 +126,54 @@ public class Main extends AppCompatActivity {
             }
         });*/
 
-        FrameLayout f = (FrameLayout)findViewById( R.id.main_content );
-        final CameraView camView = new CameraView( this );
-        f.addView( camView );
+        FrameLayout _f = (FrameLayout)findViewById( R.id.main_content );
+        final CameraView _camView = new CameraView( this );
+        final Contour _contour = new Contour( this, _camView );
+        final Effect _effect = new Effect( this );
 
-        final Contour contour = new Contour( this, camView );
-        f.addView( contour );
-
-        final Effect effect = new Effect( this );
-        f.addView( effect );
+        _f.addView( _camView );
+        _f.addView( _contour );
+        _f.addView( _effect );
 
         Toast.makeText( getApplicationContext(), "タップで撮影します", Toast.LENGTH_LONG ).show();
-        f.setOnTouchListener( new View.OnTouchListener() {
-            public boolean onTouch( View v, MotionEvent event ) {
-                if( !camView.isShot() ){
-                    camView.shotImage( v, event );
-                } else {
-                    if( mMode == Mode.FOCUS ){
-                        Toast.makeText( getApplicationContext(), "ドラッグで輪郭描画\n2点タップで映像に戻ります", Toast.LENGTH_LONG ).show();
-                        mMode = Mode.CONTOUR;
-                        effect.setVisibility( View.GONE );
-                    }
-                    if( !contour.drawContour( v, event ) ){
+
+        _f.setOnTouchListener(new View.OnTouchListener() {
+            public boolean onTouch(View v, MotionEvent event) {
+                if( _mode == Mode.FOCUS ){
+                    _camView.stopImage( event );
+                    Toast.makeText( getApplicationContext(), "ドラッグで輪郭描画\n2点タップで映像に戻ります", Toast.LENGTH_LONG ).show();
+                    _mode = Mode.CONTOUR;
+                    _effect.setVisibility( View.GONE );
+                } else if( _mode == Mode.CONTOUR ){
+                    if( !_contour.drawContour( v, event ) ){
                         Toast.makeText( getApplicationContext(), "タップで撮影します", Toast.LENGTH_LONG ).show();
-                        mMode = Mode.FOCUS;
-                        camView.shotImage( v, event );
-                        effect.setVisibility( View.VISIBLE );
+                        _mode = Mode.FOCUS;
+                        _camView.startImage();
+                        _effect.setVisibility( View.VISIBLE );
                     }
                 }
                 return true;
             }
         });
+
+        _f.setOnKeyListener( new View.OnKeyListener(){
+                 public boolean onKey( View v, int keyCode, KeyEvent event ){
+                     switch( keyCode ){
+                         case KeyEvent.KEYCODE_BACK:
+                         if( _mode == Mode.FOCUS ){
+                             finish();
+                         } else if( _mode == Mode.CONTOUR ){
+                             _mode = Mode.FOCUS;
+                             _camView.startImage();
+                             _effect.setVisibility( View.VISIBLE );
+                         }
+                         break;
+                     }
+                     return true;
+                 }
+             }
+        );
+
         /*findViewById(R.id.shot).setOnTouchListener(new View.OnTouchListener() {
             public boolean onTouch(View v, MotionEvent event) {
                 return camView.shotImage(v, event);

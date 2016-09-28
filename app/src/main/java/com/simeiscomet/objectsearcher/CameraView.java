@@ -16,11 +16,12 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceHolder.Callback;
 import android.view.SurfaceView;
-import android.view.View;
 import android.view.WindowManager;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class CameraView extends SurfaceView implements Callback, Camera.PreviewCallback
 {
@@ -38,6 +39,9 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
     private byte[] _frameBuffer;
     private int[] _rgb;
     private Bitmap _bitmap;
+
+    private CountDownLatch _latch;
+
 
     public CameraView( Context context )
     {
@@ -184,12 +188,13 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
         _camera.addCallbackBuffer( _frameBuffer );
     }
 
-    public boolean shotImage( View v, MotionEvent event )
+    public boolean stopImage( MotionEvent event )
     {
-        if( _isTake == true ){
+        if( _isTake ){
             return true;
         }
-        if( _isShot == true ){
+
+        if( _isShot ){
             _camera.startPreview();
             _isShot = false;
             return true;
@@ -203,9 +208,29 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
 
             // オートフォーカス
             _camera.cancelAutoFocus();
-            _camera.autoFocus( _mAutoFocusListener );
+
+            _latch = new CountDownLatch(1);
+            _camera.autoFocus( _AutoFocusListener );
+
+            try {
+                _latch.await( 1, TimeUnit.SECONDS );
+            } catch ( InterruptedException e ){
+                e.printStackTrace();
+            }
+
         }
         return true;
+    }
+
+    public boolean startImage()
+    {
+        if( _isShot ){
+            _camera.startPreview();
+            _isShot = false;
+            return true;
+        }
+
+        return false;
     }
 
     public boolean isShot()
@@ -259,17 +284,19 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
     /**
      * オートフォーカス完了のコールバック
      */
-    private Camera.AutoFocusCallback _mAutoFocusListener = new Camera.AutoFocusCallback()
+    private Camera.AutoFocusCallback _AutoFocusListener = new Camera.AutoFocusCallback()
     {
         public void onAutoFocus( boolean success, Camera camera ) {
             // 撮影
             //mCam.takePicture(null, null, mPicJpgListener);
-            if( success == true ){
+            if( success ){
                 _camera.stopPreview();
                 _isShot = true;
                 //Log.i( "shot", "complate" );
             }
             _isTake = false;
+
+            _latch.countDown();
         }
     };
 }
