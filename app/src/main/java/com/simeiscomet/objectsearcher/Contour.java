@@ -2,6 +2,7 @@ package com.simeiscomet.objectsearcher;
 
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -13,7 +14,10 @@ import android.graphics.PointF;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.os.AsyncTask;
+import android.preference.PreferenceManager;
 import android.support.v7.app.AlertDialog;
+import android.text.Html;
+import android.text.InputType;
 import android.util.Log;
 import android.view.Display;
 import android.view.LayoutInflater;
@@ -23,7 +27,12 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.nio.IntBuffer;
@@ -398,34 +407,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
                 _doDraw();
 
-                AlertDialog.Builder builder = new AlertDialog.Builder( _context )
-                        .setTitle("この画像を送信します")
-                        .setMessage("送信された画像はデータベースに保存され、\n自己組織化マップの学習や検証などに使用されます")
-                        .setPositiveButton("OK", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface dialog, int which)
-                            {
-                                _sendImage( _object );
-                            }
-                        }).setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface dialog, int which) {
-                                _points.clear();
-                                _clearCanvas();
-                                _mode = Mode.WAITING;
-                            }
-                        });
-                final AlertDialog dialog = builder.create();
-                LayoutInflater inflater = LayoutInflater.from(_context);
-                View alertDialog = inflater.inflate(R.layout.alert_dialog, null);
-                final ImageView imageView = (ImageView)alertDialog.findViewById(R.id.dialogImage);
-                dialog.setView(alertDialog);
-
-                imageView.setImageBitmap(_object);
-                imageView.setScaleType(ImageView.ScaleType.FIT_XY);
-                imageView.setAdjustViewBounds(true);
-
-                dialog.show();
+                _createAlertDialog( _object );
             }
         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
@@ -554,7 +536,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     private boolean _processing4Corner()
     {
         PointF tmp = _cornerPos[0];
-        System.arraycopy( _cornerPos, 1, _cornerPos, 0, 3 );
+        System.arraycopy(_cornerPos, 1, _cornerPos, 0, 3);
         _cornerPos[3] = tmp;
 
         if( _cornerPos[0].x > _cornerPos[1].x ) {
@@ -572,9 +554,173 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     }
 
 
-    private void _sendImage( Bitmap image ){
+    private void _createAlertDialog( final Bitmap image )
+    {
+        AlertDialog.Builder builder = new AlertDialog.Builder( _context )
+            .setTitle("この画像を送信します")
+            .setMessage("送信された画像はデータベースに保存され、\n自己組織化マップの学習や検証などに使用されます")
+            .setPositiveButton("次へ", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which)
+                {
+                    _createInputDialog( image );
+                }
+            }).setNegativeButton("キャンセル", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    _points.clear();
+                    _clearCanvas();
+                    _mode = Mode.WAITING;
+                }
+            });
+        final AlertDialog dialog = builder.create();
+        LayoutInflater inflater = LayoutInflater.from(_context);
+        View alertDialog = inflater.inflate(R.layout.alert_dialog, null);
+        final ImageView imageView = (ImageView)alertDialog.findViewById(R.id.dialogImage);
+        dialog.setView(alertDialog);
+
+        imageView.setImageBitmap( image );
+        imageView.setScaleType(ImageView.ScaleType.FIT_XY);
+        imageView.setAdjustViewBounds(true);
+
+        dialog.show();
+    }
+
+
+    private void _createInputDialog( final Bitmap image )
+    {
+        // エディットテキストの生成
+        final EditText editOwner = new EditText( _context );
+        final EditText editType = new EditText( _context );
+        final EditText editCompany = new EditText( _context );
+        final EditText editProduct = new EditText( _context );
+        final CheckBox checkFailure = new CheckBox( _context );
+
+        // 外枠とパーツの作成
+        LinearLayout layout = new LinearLayout( _context );
+        // 上から下にパーツを組み込む設定
+        layout.setOrientation(LinearLayout.VERTICAL);
+
+        // 外枠にパーツを組み込む
+        LinearLayout.MarginLayoutParams txLP = new LinearLayout.LayoutParams( 300, 40 );
+        txLP.leftMargin = 20;
+        LinearLayout.MarginLayoutParams edLP = new LinearLayout.LayoutParams( 300, 80 );
+        edLP.leftMargin = 20;
+
+        layout.addView( makeTextView("所有者", true), txLP);
+        layout.addView( editOwner, edLP);
+        layout.addView( makeTextView("物体の種類", true), txLP);
+        layout.addView( editType, edLP);
+        layout.addView( makeTextView("製造会社", false), txLP );
+        layout.addView( editCompany, edLP );
+        layout.addView(makeTextView("製品名", false), txLP);
+        layout.addView(editProduct, edLP);
+
+        layout.addView(checkFailure, edLP);
+
+        // エディットボックスの入力タイプの設定
+        editOwner.setInputType( InputType.TYPE_CLASS_TEXT );
+        editType.setInputType( InputType.TYPE_CLASS_TEXT );
+        editCompany.setInputType( InputType.TYPE_CLASS_TEXT );
+        editProduct.setInputType(InputType.TYPE_CLASS_TEXT);
+
+        final SharedPreferences pref = PreferenceManager.getDefaultSharedPreferences( _context );
+
+        // 入力内容の初期化
+        editOwner.setText( pref.getString("owner", "") );
+        editType.setText("");
+        editCompany.setText("NULL");
+        editProduct.setText("NULL");
+        checkFailure.setText("失敗している");
+        checkFailure.setChecked(false);
+
+        final AlertDialog dialog = new AlertDialog.Builder( _context )
+                .setView( layout )
+                .setTitle("物体の情報を入力")
+                .setPositiveButton("送信", null) //Set to null. We override the onclick
+                .setNegativeButton("キャンセル", null)
+                .create();
+
+        dialog.setOnShowListener( new DialogInterface.OnShowListener() {
+            @Override
+            public void onShow( DialogInterface d ) {
+                // dialogOKボタン
+                Button bOk = dialog.getButton( AlertDialog.BUTTON_POSITIVE );
+                bOk.setOnClickListener( new View.OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                        boolean complete = true;
+                        String toastText = "";
+                        if( editOwner.getText().toString().length() <= 0 ){
+                            toastText += "所有者  ";
+                            complete = false;
+                        }
+                        if( editType.getText().toString().length() <= 0 ){
+                            toastText += "物体の種類  ";
+                            complete = false;
+                        }
+                        if( !complete ){
+                            toastText += "は入力必須です";
+                            Toast.makeText( _context, toastText, Toast.LENGTH_SHORT ).show();
+                            return;
+                        }
+
+                        SharedPreferences.Editor e = pref.edit();
+                        e.putString("owner", editOwner.getText().toString() );
+                        e.commit();
+
+                        String[] objInfo = new String[5];
+                        objInfo[0] = editOwner.getText().toString();
+                        objInfo[1] = editType.getText().toString();
+                        objInfo[2] = editCompany.getText().toString();
+                        objInfo[3] = editProduct.getText().toString();
+                        objInfo[4] = ( checkFailure.isChecked() ? "true" : "false" );
+
+                        _sendImage( image, objInfo );
+
+                        //Dismiss once everything is OK.
+                        dialog.dismiss();
+                    }
+                });
+
+                // dialogOKボタン
+                Button bCancel = dialog.getButton( AlertDialog.BUTTON_NEGATIVE );
+                bCancel.setOnClickListener( new View.OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                        _points.clear();
+                        _clearCanvas();
+                        _mode = Mode.WAITING;
+                        dialog.cancel();
+                        dialog.dismiss();
+                    }
+                });
+            }
+        });
+
+
+        dialog.show();
+    }
+
+
+    private TextView makeTextView( String sMessage, Boolean required ){
+        //テキストビューの生成
+        TextView tv = new TextView( _context );
+
+        if( required )
+            sMessage += " <font color=\"#FF0000\">*</font>";
+
+        CharSequence csHtml = Html.fromHtml( sMessage );
+
+        //メッセージの設定
+        tv.setText( csHtml );
+        return tv;
+    }
+
+
+    private void _sendImage( Bitmap image, String[] objInfo ){
         try{
-            new HttpPostAsync( _context, _context.getString( R.string.php_url ), image ).execute();
+            new HttpMultiPostAsync( _context, _context.getString( R.string.php_url ), image, objInfo ).execute();
         } catch ( RuntimeException e ){
             Log.e("Error", "" + e.toString() );
         }

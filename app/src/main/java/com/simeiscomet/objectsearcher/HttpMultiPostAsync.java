@@ -16,20 +16,22 @@ import java.io.IOException;
 /**
  * Created by NKJ on 2016/09/20.
  */
-public class HttpPostAsync extends AsyncTask<String, Integer, Boolean> implements DialogInterface.OnCancelListener {
+public class HttpMultiPostAsync extends AsyncTask<String, Integer, Boolean> implements DialogInterface.OnCancelListener {
     private final String _fileName = "objectsearcher_cashimage.png";
     private File _dir;
     private String _url;
     private Bitmap _image;
+    private  String[] _objInfo;
 
     private Context _context;
     private ProgressDialog _dialog;
 
-    public HttpPostAsync( Context context0, String url0, Bitmap image0 )
+    public HttpMultiPostAsync(Context context0, String url0, Bitmap image0, String[] objInfo0)
     {
         _context = context0;
         _url = url0;
         _image = image0;
+        _objInfo = objInfo0;
     }
 
     @Override
@@ -71,7 +73,7 @@ public class HttpPostAsync extends AsyncTask<String, Integer, Boolean> implement
     protected Boolean doInBackground( String... params )
     {
         HttpMultiPart httpPost = new HttpMultiPart();
-        return httpPost.sendData( _url, _dir, _fileName );
+        return httpPost.sendData( _url, _dir, _fileName, _objInfo );
     }
 
     @Override
