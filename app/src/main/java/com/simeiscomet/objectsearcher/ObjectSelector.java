@@ -160,7 +160,7 @@ public class ObjectSelector extends Activity {
             }
         });
 
-        Toast.makeText(getApplicationContext(), "ドラッグで輪郭描画\n2点タップで映像に戻ります", Toast.LENGTH_LONG).show();
+        Toast.makeText(getApplicationContext(), "ドラッグで輪郭描画", Toast.LENGTH_LONG).show();
 
         // Set up the user interaction to manually show or hide the system UI.
         /*mContentView.setOnClickListener(new View.OnClickListener() {

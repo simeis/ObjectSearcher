@@ -46,8 +46,8 @@ import java.util.concurrent.CountDownLatch;
 public class Contour extends SurfaceView implements SurfaceHolder.Callback
 {
     private final int MAX_CLUSTER = 3;
-    private final double MIN_DISTANCE = 10.0;
-    private final double MAX_DISTANCE = 120.0;
+    private final double MIN_DISTANCE = 5.0;
+    private final double MAX_DISTANCE = 90.0;
 
     private enum Mode{
         WAITING,
@@ -320,7 +320,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     {
         Rect src = new Rect( 0, 0, _camImage.getWidth(), _camImage.getHeight() );
         Rect dst = new Rect( 0, 0, this.getWidth(), this.getHeight() );
-        canvas.drawBitmap( _camImage, src, dst, null );
+        canvas.drawBitmap(_camImage, src, dst, null);
     }
 
 
@@ -543,9 +543,9 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             }).setNegativeButton("キャンセル", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface dialog, int which) {
-                    _points.clear();
-                    _clearCanvas();
-                    _mode = Mode.WAITING;
+                    //_points.clear();
+                    //_clearCanvas();
+                    //_mode = Mode.WAITING;
                 }
             });
         final AlertDialog dialog = builder.create();
@@ -668,14 +668,14 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     }
                 });
 
-                // dialogOKボタン
+                // dialogCancelボタン
                 Button bCancel = dialog.getButton( AlertDialog.BUTTON_NEGATIVE );
                 bCancel.setOnClickListener( new View.OnClickListener() {
                     @Override
                     public void onClick(View view) {
-                        _points.clear();
-                        _clearCanvas();
-                        _mode = Mode.WAITING;
+                        //_points.clear();
+                        //_clearCanvas();
+                        //_mode = Mode.WAITING;
                         dialog.cancel();
                         dialog.dismiss();
                     }
@@ -946,7 +946,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 Point pos;// = posInLine( nearestPoint, _points.get(k), loop );
                 int r = 0, g = 0, b = 0;
 
-                for( int i=loop; i>loop-10; --i ){
+                final int num = 5;
+                for( int i=loop; i>loop-num; --i ){
                     pos = posInLine( nearestPoint, _points.get(k), i );
                     //Log.d("GetPixPos", "x:"+ pos.x );
                     //Log.d("GetPixPos", "y:"+ pos.y );
@@ -958,9 +959,9 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     b += Color.blue( tmp );
                 }
 
-                r /= 10;
-                g /= 10;
-                b /= 10;
+                r /= num;
+                g /= num;
+                b /= num;
 
                 // 背景情報追加
                 background.add( Color.rgb( r, g, b ) );
@@ -1004,13 +1005,32 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 //double maxEdge = 0.0;
                 //PointF maxEdgePos;
                 boolean update = false;
+                double max = 60;
 
-                for( int i=loop; i>1; --i ){
-                    Point nowPos = posInLine( nearestPointF, _points.get( k ), i );
-                    Point nextPos = posInLine( nearestPointF, _points.get( k ), i-1 );
+                final int num = 3;
+                for( int i=loop-num; i>num-1; --i ){
+                    int prevR = 0, prevG = 0, prevB = 0;
+                    int nextR = 0, nextG = 0, nextB = 0;
 
-                    int nowColor = image[nowPos.y*_camImage.getWidth() + nowPos.x];
-                    int nextColor = image[nextPos.y*_camImage.getWidth() + nowPos.x];
+                    for( int j=0; j<num; ++j ){
+                        Point prevPos = posInLine( nearestPointF, _points.get( k ), i-j );
+                        int prevColor = image[prevPos.y*_camImage.getWidth() + prevPos.x];
+                        prevR += Color.red( prevColor );
+                        prevG += Color.green( prevColor );
+                        prevB += Color.blue( prevColor );
+
+                        Point nextPos = posInLine( nearestPointF, _points.get( k ), i+j+1 );
+                        int nextColor = image[nextPos.y*_camImage.getWidth() + nextPos.x];
+                        nextR += Color.red( nextColor );
+                        nextG += Color.green( nextColor );
+                        nextB += Color.blue( nextColor );
+                    }
+
+                    prevR /= num; prevG /= num; prevB /= num;
+                    nextR /= num; nextG /= num; nextB /= num;
+
+                    int prev = Color.rgb( prevR, prevG, prevB );
+                    int next = Color.rgb( nextR, nextG, nextB );
 
                     // 背景候補と比較
                     int back = background.get( background.size()-1 );
@@ -1020,31 +1040,65 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                         back = background.get( k -1 );
                     }
                     if( k != background.size()-1 ){
-                        front = background.get( k +1 );
+                        front = background.get( k + 1 );
                     }
 
-                    boolean nowBackground = false;
-                    boolean nextObject = false;
+                    final double range = 150.0;
 
-                    final double range = 60.0;
+                    /*if( _colorDistance( prev, back ) > range ||
+                        _colorDistance( prev, current ) > range ||
+                        _colorDistance( prev, front ) > range ){
+                        continue;
+                    }*/
 
-                    if( _colorDistance( nowColor, back ) < range ||
-                        _colorDistance( nowColor, current ) < range ||
-                        _colorDistance( nowColor, front ) < range ){
-                        nowBackground = true;
-                    }
-                    if( _colorDistance( nextColor, back ) >= range ||
-                        _colorDistance( nextColor, current ) >= range ||
-                        _colorDistance( nextColor, front ) >= range ){
-                        nextObject = true;
-                    }
-
-                    if( nowBackground && nextObject ){
-                        _points.set( k, new PointF( nowPos ) );
+                    if( _colorDistance( prev, next ) > max ){
                         update = true;
+                        _points.set( k, new PointF( posInLine( nearestPointF, _points.get( k ), i ) ) );
+                        max = _colorDistance( prev, next );
                         break;
                     }
                 }
+
+//                for( int i=loop; i>1; --i ){
+//                    Point nowPos = posInLine( nearestPointF, _points.get( k ), i );
+//                    Point nextPos = posInLine( nearestPointF, _points.get( k ), i-1 );
+//
+//                    int nowColor = image[nowPos.y*_camImage.getWidth() + nowPos.x];
+//                    int nextColor = image[nextPos.y*_camImage.getWidth() + nowPos.x];
+//
+//                    // 背景候補と比較
+//                    int back = background.get( background.size()-1 );
+//                    int current = background.get( k );
+//                    int front = background.get( 0 );
+//                    if( k != 0 ){
+//                        back = background.get( k -1 );
+//                    }
+//                    if( k != background.size()-1 ){
+//                        front = background.get( k +1 );
+//                    }
+//
+//                    boolean nowBackground = false;
+//                    boolean nextObject = false;
+//
+//                    final double range = 60.0;
+//
+//                    if( _colorDistance( nowColor, back ) < range ||
+//                            _colorDistance( nowColor, current ) < range ||
+//                            _colorDistance( nowColor, front ) < range ){
+//                        nowBackground = true;
+//                    }
+//                    if( _colorDistance( nextColor, back ) >= range ||
+//                            _colorDistance( nextColor, current ) >= range ||
+//                            _colorDistance( nextColor, front ) >= range ){
+//                        nextObject = true;
+//                    }
+//
+//                    if( nowBackground && nextObject ){
+//                        _points.set( k, new PointF( nowPos ) );
+//                        update = true;
+//                        break;
+//                    }
+//                }
 
                 updateFlags.add( update );
             }
