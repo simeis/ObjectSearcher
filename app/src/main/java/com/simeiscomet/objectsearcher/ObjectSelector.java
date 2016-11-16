@@ -1,23 +1,27 @@
 package com.simeiscomet.objectsearcher;
 
 import android.annotation.SuppressLint;
-import android.content.Context;
+import android.app.ActionBar;
+import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
-import android.support.v7.app.ActionBar;
-import android.support.v7.app.AppCompatActivity;
+import android.support.v4.app.NavUtils;
 import android.view.KeyEvent;
+import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.Window;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.Toast;
 
 /**
  * An example full-screen activity that shows and hides the system UI (i.e.
  * status bar and navigation/system bar) with user interaction.
  */
-public class Main extends AppCompatActivity {
+public class ObjectSelector extends Activity {
+    private static BitmapApplication _app;
+
     /**
      * Whether or not the system UI should be auto-hidden after
      * {@link #AUTO_HIDE_DELAY_MILLIS} milliseconds.
@@ -59,11 +63,11 @@ public class Main extends AppCompatActivity {
         @Override
         public void run() {
             // Delayed display of UI elements
-            ActionBar actionBar = getSupportActionBar();
+            ActionBar actionBar = getActionBar();
             if (actionBar != null) {
                 actionBar.show();
             }
-            //mControlsView.setVisibility(View.VISIBLE);
+            mControlsView.setVisibility(View.VISIBLE);
         }
     };
     private boolean mVisible;
@@ -89,27 +93,74 @@ public class Main extends AppCompatActivity {
             return false;
         }
     };
-    /**
-     * ATTENTION: This was auto-generated to implement the App Indexing API.
-     * See https://g.co/AppIndexing/AndroidStudio for more information.
-     */
-    //private GoogleApiClient client;
 
     @Override
-    protected void onCreate( Bundle savedInstanceState )
-    {
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        //getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-
-        setContentView( R.layout.activity_main );
-
-        final Context context = this;
+        setContentView(R.layout.activity_object_selector);
+        ActionBar actionBar = getActionBar();
+        if (actionBar != null) {
+            actionBar.setDisplayHomeAsUpEnabled(true);
+        }
 
         mVisible = true;
-        //mControlsView = findViewById(R.id.fullscreen_content_controls);
+        //mControlsView = findViewById( R.id.fullscreen_content_controls );
         mContentView = findViewById( R.id.fullscreen_content );
+
+        _app = (BitmapApplication)this.getApplication();
+
+        FrameLayout f = (FrameLayout)findViewById( R.id.object_selector_content );
+        final Contour contour = new Contour( this, _app );
+        contour.setZOrderOnTop( false );
+
+        f.addView( contour );
+
+        f.setOnTouchListener( new View.OnTouchListener(){
+            public boolean onTouch( View v, MotionEvent event ){
+                if( !contour.drawContour( v, event ) ){
+                    Intent intent = new Intent(getApplicationContext(), SettingActivity.class);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    startActivity(intent);
+                }
+                return true;
+            }
+        });
+
+        f.setOnKeyListener(new View.OnKeyListener() {
+            public boolean onKey(View v, int keyCode, KeyEvent event) {
+                switch( keyCode ){
+                case KeyEvent.KEYCODE_BACK:
+                    Intent intent = new Intent(getApplicationContext(), Main.class);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    startActivity(intent);
+                    break;
+                }
+                return true;
+            }
+        });
+
+        ImageButton imageButtonSetting = (ImageButton)findViewById( R.id.imageButtonSetting );
+        imageButtonSetting.bringToFront();
+
+//        ImageButton imageButtonSetting = new ImageButton( this );
+//        LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams( 64, 64 );
+//        layout.gravity = Gravity.TOP | Gravity.RIGHT;
+//        layout.setMargins( 0, 16, 16, 0 );
+//        imageButtonSetting.setLayoutParams( layout );
+//        imageButtonSetting.setImageResource( R.drawable.gear );
+//        imageButtonSetting.setAlpha( 0.8f );
+//        f.addView( imageButtonSetting );
+        imageButtonSetting.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Intent intent = new Intent(getApplicationContext(), SettingActivity.class);
+                intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                startActivity(intent);
+            }
+        });
+
+        Toast.makeText(getApplicationContext(), "ドラッグで輪郭描画\n2点タップで映像に戻ります", Toast.LENGTH_LONG).show();
 
         // Set up the user interaction to manually show or hide the system UI.
         /*mContentView.setOnClickListener(new View.OnClickListener() {
@@ -119,45 +170,16 @@ public class Main extends AppCompatActivity {
             }
         });*/
 
-        BitmapApplication app = (BitmapApplication)getApplication();
+        // Upon interacting with UI controls, delay any scheduled hide()
+        // operations to prevent the jarring behavior of controls going away
+        // while interacting with the UI.
+        //findViewById(R.id.dummy_button).setOnTouchListener(mDelayHideTouchListener);
+    }
 
-        FrameLayout _f = (FrameLayout)findViewById( R.id.main_content );
-        final CameraView _camView = new CameraView( getApplicationContext(), app );
-        final Effect _effect = new Effect( getApplicationContext() );
-
-        _f.addView( _camView );
-        _f.addView( _effect );
-
-        Toast.makeText( getApplicationContext(), "タップで撮影します", Toast.LENGTH_LONG ).show();
-
-        _f.setOnTouchListener(new View.OnTouchListener() {
-            public boolean onTouch(View v, MotionEvent event) {
-                _camView.stopImage( event );
-                return true;
-            }
-        });
-
-        _f.setOnKeyListener( new View.OnKeyListener(){
-             public boolean onKey( View v, int keyCode, KeyEvent event ){
-             switch( keyCode ){
-             case KeyEvent.KEYCODE_BACK:
-                 finish();
-                 //android.os.Process.killProcess(Process.myPid());
-                 break;
-             }
-             return true;
-             }
-         });
-
-        /*findViewById(R.id.shot).setOnTouchListener(new View.OnTouchListener() {
-            public boolean onTouch(View v, MotionEvent event) {
-                return camView.shotImage(v, event);
-            }
-        });*/
-
-        // ATTENTION: This was auto-generated to implement the App Indexing API.
-        // See https://g.co/AppIndexing/AndroidStudio for more information.
-        //client = new GoogleApiClient.Builder(this).addApi(AppIndex.API).build();
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        _app.clearObj();
     }
 
     @Override
@@ -170,6 +192,17 @@ public class Main extends AppCompatActivity {
         delayedHide(100);
     }
 
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        int id = item.getItemId();
+        if (id == android.R.id.home) {
+            // This ID represents the Home or Up button.
+            NavUtils.navigateUpFromSameTask(this);
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
     private void toggle() {
         if (mVisible) {
             hide();
@@ -180,7 +213,7 @@ public class Main extends AppCompatActivity {
 
     private void hide() {
         // Hide UI first
-        ActionBar actionBar = getSupportActionBar();
+        ActionBar actionBar = getActionBar();
         if (actionBar != null) {
             actionBar.hide();
         }
@@ -190,7 +223,6 @@ public class Main extends AppCompatActivity {
         // Schedule a runnable to remove the status and navigation bar after a delay
         mHideHandler.removeCallbacks(mShowPart2Runnable);
         mHideHandler.postDelayed(mHidePart2Runnable, UI_ANIMATION_DELAY);
-
     }
 
     @SuppressLint("InlinedApi")
@@ -213,44 +245,4 @@ public class Main extends AppCompatActivity {
         mHideHandler.removeCallbacks(mHideRunnable);
         mHideHandler.postDelayed(mHideRunnable, delayMillis);
     }
-
-    /*@Override
-    public void onStart() {
-        super.onStart();
-
-        // ATTENTION: This was auto-generated to implement the App Indexing API.
-        // See https://g.co/AppIndexing/AndroidStudio for more information.
-        client.connect();
-        Action viewAction = Action.newAction(
-                Action.TYPE_VIEW, // TODO: choose an action type.
-                "Main Page", // TODO: Define a title for the content shown.
-                // TODO: If you have web page content that matches this app activity's content,
-                // make sure this auto-generated web page URL is correct.
-                // Otherwise, set the URL to null.
-                Uri.parse("http://host/path"),
-                // TODO: Make sure this auto-generated app deep link URI is correct.
-                Uri.parse("android-app://com.simeiscomet.objectsearcher/http/host/path")
-        );
-        AppIndex.AppIndexApi.start(client, viewAction);
-    }
-
-    @Override
-    public void onStop() {
-        super.onStop();
-
-        // ATTENTION: This was auto-generated to implement the App Indexing API.
-        // See https://g.co/AppIndexing/AndroidStudio for more information.
-        Action viewAction = Action.newAction(
-                Action.TYPE_VIEW, // TODO: choose an action type.
-                "Main Page", // TODO: Define a title for the content shown.
-                // TODO: If you have web page content that matches this app activity's content,
-                // make sure this auto-generated web page URL is correct.
-                // Otherwise, set the URL to null.
-                Uri.parse("http://host/path"),
-                // TODO: Make sure this auto-generated app deep link URI is correct.
-                Uri.parse("android-app://com.simeiscomet.objectsearcher/http/host/path")
-        );
-        AppIndex.AppIndexApi.end(client, viewAction);
-        client.disconnect();
-    }*/
 }

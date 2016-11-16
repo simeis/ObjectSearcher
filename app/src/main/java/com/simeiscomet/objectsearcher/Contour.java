@@ -2,6 +2,7 @@ package com.simeiscomet.objectsearcher;
 
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -22,7 +23,6 @@ import android.util.Log;
 import android.view.Display;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
-import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -48,7 +48,6 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     private final int MAX_CLUSTER = 3;
     private final double MIN_DISTANCE = 10.0;
     private final double MAX_DISTANCE = 120.0;
-    private final int MAX_THREAD_NUM = 5;
 
     private enum Mode{
         WAITING,
@@ -64,7 +63,10 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
     private Display _display;
 
-    private CameraView _camView;
+    //private CameraView _camView;
+    private Bitmap _camImage;
+
+    private BitmapApplication _app;
 
     private ArrayList<PointF> _points = new ArrayList<>();
     private boolean _isTouch = false;
@@ -85,7 +87,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
     private Mode _mode = Mode.WAITING;
 
-    public Contour( Context context, CameraView camView )
+    public Contour( Context context, BitmapApplication app )
     {
         super( context );
         _context = context;
@@ -96,10 +98,13 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         WindowManager winMan = (WindowManager)context.getSystemService(Context.WINDOW_SERVICE);
         _display = winMan.getDefaultDisplay();
 
-        _holder.setFormat(PixelFormat.TRANSLUCENT);
+        _holder.setFormat( PixelFormat.TRANSLUCENT );
         setZOrderOnTop(true);
 
-        _camView = camView;
+        //_camView = camView;
+        _camImage = app.getObj();
+
+        _app = app;
     }
 
     @Override
@@ -263,6 +268,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             paint.setColor( Color.MAGENTA );
             canvas.drawColor( Color.TRANSPARENT, PorterDuff.Mode.CLEAR );
 
+            _drawBitmap( canvas );
+
             // 線分描画
             if( _points.size() >= 2 ){
                 for( int i=0; i<_points.size()-1; ++i ){
@@ -298,9 +305,22 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     private void _clearCanvas()
     {
         Canvas canvas = _holder.lockCanvas();
-        canvas.drawColor( Color.TRANSPARENT, PorterDuff.Mode.CLEAR );
+
         // 描画処理...
+        if( canvas != null ){
+            canvas.drawColor( Color.TRANSPARENT, PorterDuff.Mode.CLEAR );
+            _drawBitmap( canvas );
+        }
+
         _holder.unlockCanvasAndPost(canvas);
+    }
+
+
+    private void _drawBitmap( Canvas canvas )
+    {
+        Rect src = new Rect( 0, 0, _camImage.getWidth(), _camImage.getHeight() );
+        Rect dst = new Rect( 0, 0, this.getWidth(), this.getHeight() );
+        canvas.drawBitmap( _camImage, src, dst, null );
     }
 
 
@@ -316,7 +336,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             {
                 // 画像取得
                 Matrix matrix = _generateMatrix();
-                Bitmap bitmap = Bitmap.createBitmap( _camView.getBitmap(), 0, 0, _camView.getPrevWidth(), _camView.getPrevHeight(), matrix, false );
+                Bitmap bitmap = Bitmap.createBitmap( _camImage, 0, 0, _camImage.getWidth(), _camImage.getHeight(), matrix, false );
                 publishProgress();
 
                 // 画像変換
@@ -387,8 +407,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             protected void onFailure( Exception exception )
             {
                 if( exception != null ) {
-                    Toast.makeText( _context, exception.getMessage(), Toast.LENGTH_SHORT ).show();
-                    Log.e("Error", exception.toString() );
+                    Toast.makeText( _context, exception.getMessage() +"\nLine Number:"+ exception.getStackTrace()[1].getLineNumber(), Toast.LENGTH_SHORT ).show();
+                    Log.e("Error", exception.toString());
                 }
                 _points.clear();
                 _clearCanvas();
@@ -417,20 +437,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     {
         Matrix ret = new Matrix();
 
-        switch( _camView.getRotate() ){
-        case Surface.ROTATION_0:
-            ret.preScale( 1, -1 );
-            break;
-        case Surface.ROTATION_90:
-            ret.preScale( 1, 1 );
-            break;
-        case Surface.ROTATION_180:
-            ret.preScale( -1, 1 );
-            break;
-        case Surface.ROTATION_270:
-            ret.preScale( -1, -1 );
-            break;
-        }
+        ret.preScale(1, 1);
 
         return ret;
     }
@@ -465,21 +472,11 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
         PointF ret = new PointF( 1.0f, 1.0f );
 
-        float prevLong = Math.max(_camView.getPrevWidth(), _camView.getPrevHeight());
-        float prevShort = Math.min(_camView.getPrevWidth(), _camView.getPrevHeight());
+        float prevLong = Math.max(_camImage.getWidth(), _camImage.getHeight());
+        float prevShort = Math.min(_camImage.getWidth(), _camImage.getHeight());
 
-        switch( _camView.getRotate() ){
-            case Surface.ROTATION_0:
-            case Surface.ROTATION_180:
-                ret = new PointF( prevShort / _camView.getWidth(),
-                                   prevLong / _camView.getHeight() );
-                break;
-            case Surface.ROTATION_90:
-            case Surface.ROTATION_270:
-                ret = new PointF( prevLong / _camView.getWidth(),
-                                   prevShort / _camView.getHeight() );
-                break;
-        }
+        ret = new PointF( prevLong / this.getWidth(),
+                           prevShort / this.getHeight() );
 
         return ret;
     }
@@ -488,23 +485,10 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     {
         PointF tmp;
 
-        switch( _camView.getRotate() ){
-        case Surface.ROTATION_0:
-        case Surface.ROTATION_180:
-            for( final PointF pos : points ){
-                tmp = new PointF( pos.x, pos.y );
-                pos.x = tmp.y / ratio.y;
-                pos.y = tmp.x / ratio.x;
-            }
-            break;
-        case Surface.ROTATION_90:
-        case Surface.ROTATION_270:
-            for( final PointF pos : points ){
-                tmp = new PointF( pos.x, pos.y );
-                pos.x = tmp.x / ratio.x;
-                pos.y = tmp.y / ratio.y;
-            }
-            break;
+        for( final PointF pos : points ){
+            tmp = new PointF( pos.x, pos.y );
+            pos.x = tmp.x / ratio.x;
+            pos.y = tmp.y / ratio.y;
         }
     }
 
@@ -512,23 +496,10 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     {
         PointF tmp;
 
-        switch( _camView.getRotate() ){
-        case Surface.ROTATION_0:
-        case Surface.ROTATION_180:
-            for( int i=0; i<num; ++i ){
-                tmp = new PointF( points[i].x, points[i].y );
-                points[i].x = tmp.y / ratio.y;
-                points[i].y = tmp.x / ratio.x;
-            }
-            break;
-        case Surface.ROTATION_90:
-        case Surface.ROTATION_270:
-            for( int i=0; i<num; ++i ){
-                tmp = new PointF( points[i].x, points[i].y );
-                points[i].x = tmp.x / ratio.x;
-                points[i].y = tmp.y / ratio.y;
-            }
-            break;
+        for( int i=0; i<num; ++i ){
+            tmp = new PointF( points[i].x, points[i].y );
+            points[i].x = tmp.x / ratio.x;
+            points[i].y = tmp.y / ratio.y;
         }
     }
 
@@ -563,7 +534,11 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 @Override
                 public void onClick(DialogInterface dialog, int which)
                 {
-                    _createInputDialog( image );
+                    //_createInputDialog( image );
+                    _app.setObj( image );
+                    Intent intent = new Intent( _context, SenderActivity.class );
+                    intent.setFlags( Intent.FLAG_ACTIVITY_NEW_TASK );
+                    _context.startActivity(intent);
                 }
             }).setNegativeButton("キャンセル", new DialogInterface.OnClickListener() {
                 @Override
@@ -591,6 +566,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     {
         // エディットテキストの生成
         final EditText editOwner = new EditText( _context );
+        final EditText editGroup = new EditText( _context );
         final EditText editType = new EditText( _context );
         final EditText editCompany = new EditText( _context );
         final EditText editProduct = new EditText( _context );
@@ -607,10 +583,12 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         LinearLayout.MarginLayoutParams edLP = new LinearLayout.LayoutParams( 300, 80 );
         edLP.leftMargin = 20;
 
-        layout.addView( makeTextView("所有者", true), txLP);
-        layout.addView( editOwner, edLP);
-        layout.addView( makeTextView("物体の種類", true), txLP);
-        layout.addView( editType, edLP);
+        layout.addView( makeTextView("作成者", true), txLP );
+        layout.addView( editOwner, edLP );
+        layout.addView( makeTextView("グループ", true), txLP );
+        layout.addView( editGroup, edLP );
+        layout.addView( makeTextView("物体の種類", true), txLP );
+        layout.addView( editType, edLP );
         layout.addView( makeTextView("製造会社", false), txLP );
         layout.addView( editCompany, edLP );
         layout.addView(makeTextView("製品名", false), txLP);
@@ -620,6 +598,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
         // エディットボックスの入力タイプの設定
         editOwner.setInputType( InputType.TYPE_CLASS_TEXT );
+        editGroup.setInputType( InputType.TYPE_CLASS_TEXT );
         editType.setInputType( InputType.TYPE_CLASS_TEXT );
         editCompany.setInputType( InputType.TYPE_CLASS_TEXT );
         editProduct.setInputType(InputType.TYPE_CLASS_TEXT);
@@ -628,6 +607,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
         // 入力内容の初期化
         editOwner.setText( pref.getString("owner", "") );
+        editGroup.setText("");
         editType.setText("");
         editCompany.setText("NULL");
         editProduct.setText("NULL");
@@ -655,6 +635,10 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                             toastText += "所有者  ";
                             complete = false;
                         }
+                        if( editGroup.getText().toString().length() <= 0 ){
+                            toastText += "グループ  ";
+                            complete = false;
+                        }
                         if( editType.getText().toString().length() <= 0 ){
                             toastText += "物体の種類  ";
                             complete = false;
@@ -669,14 +653,15 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                         e.putString("owner", editOwner.getText().toString() );
                         e.commit();
 
-                        String[] objInfo = new String[5];
+                        String[] objInfo = new String[6];
                         objInfo[0] = editOwner.getText().toString();
-                        objInfo[1] = editType.getText().toString();
-                        objInfo[2] = editCompany.getText().toString();
-                        objInfo[3] = editProduct.getText().toString();
-                        objInfo[4] = ( checkFailure.isChecked() ? "true" : "false" );
+                        objInfo[1] = editGroup.getText().toString();
+                        objInfo[2] = editType.getText().toString();
+                        objInfo[3] = editCompany.getText().toString();
+                        objInfo[4] = editProduct.getText().toString();
+                        objInfo[5] = ( checkFailure.isChecked() ? "true" : "false" );
 
-                        _sendImage( image, objInfo );
+                        //_sendImage( image, objInfo );
 
                         //Dismiss once everything is OK.
                         dialog.dismiss();
@@ -710,7 +695,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         if( required )
             sMessage += " <font color=\"#FF0000\">*</font>";
 
-        CharSequence csHtml = Html.fromHtml( sMessage );
+        CharSequence csHtml = Html.fromHtml(sMessage);
 
         //メッセージの設定
         tv.setText( csHtml );
@@ -718,6 +703,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     }
 
 
+/*
     private void _sendImage( Bitmap image, String[] objInfo ){
         try{
             new HttpMultiPostAsync( _context, _context.getString( R.string.php_url ), image, objInfo ).execute();
@@ -725,6 +711,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             Log.e("Error", "" + e.toString() );
         }
     }
+*/
 
 
     private double[][] _ptMatrixGenerate()
@@ -773,9 +760,10 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         _midPoints.clear();
 
         int clusterNum;
+
         {
             double dist[] = {  _calculateDistance( _cornerPos[0], _cornerPos[1] ),
-                    _calculateDistance( _cornerPos[0], _cornerPos[3] ) };
+                                _calculateDistance( _cornerPos[0], _cornerPos[3] ) };
             double min = Math.min(dist[0], dist[1]);
             double max = Math.max(dist[0], dist[1]);
 
@@ -784,21 +772,16 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
             //if( min*max < 30000 ) --clusterNum;		// 面積が小さければクラスタ数を減らす
             //std::cout << min/max << std::endl;
             //std::cout << min*max << std::endl;
-
         }
 
         // 片方の点
         {
+            Random rnd = new Random();
+
             for( int i=0; i<_points.size(); ++i ){
 
                 // もう片方の点
                 for( int j=i+1; j<_points.size(); ++j ){
-                    // 同じとき
-                    /*if( i == j ){
-                        ++j;
-                        continue;
-                    }*/
-
                     // 隣同士は無視
                     if( i == 0 ){
                         if( j == 1 || j == _points.size()-1 ){
@@ -818,17 +801,19 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     boolean determinate = false;
 
                     for( int k=0; k<_points.size(); ++k ){
-                        if( k == i || k == j ){
+                        int l = k + 1;
+                        if( k == _points.size()-1 ){
+                            l = 0;
+                        }
+
+                        if( k == i || k == j || l == i || l == j ){
                             continue;
                         }
 
                         PointF a = _points.get( i );
                         PointF b = _points.get( j );
                         PointF c = _points.get( k );
-                        PointF d = _points.get( 0 );
-                        if( k != _points.size()-1 ){
-                            d = _points.get( k + 1 );
-                        }
+                        PointF d = _points.get( l );
 
                         if( _intersectionDetermination( a, b, c, d ) ){
                             determinate = true;
@@ -841,7 +826,6 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     }
 
                     // 中点保存
-                    Random rnd = new Random();
                     Cluster midPoint = new Cluster( new PointF( ( _points.get(i).x + _points.get(j).x )/2.0f+0.001f, ( _points.get(i).y + _points.get(j).y )/2.0f+0.001f ), rnd.nextInt(clusterNum) );
 
                     _midPoints.add( midPoint );
@@ -855,14 +839,15 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 int count = 0;
 
                 PointF a = _midPoints.get( i ).point;
-                PointF b = new PointF( _camView.getPrevWidth(), _midPoints.get( i ).point.y );
+                PointF b = new PointF( _camImage.getWidth(), _midPoints.get( i ).point.y );
 
                 for( int j=0; j<_points.size()-1; ++j ){
-                    PointF c = _points.get( j );
-                    PointF d = _points.get( j + 1 );
+                    int k = j + 1;
                     if( j == _points.size()-1 ){
-                        d = _points.get( 0 );
+                        k = 0;
                     }
+                    PointF c = _points.get( j );
+                    PointF d = _points.get( k );
 
                     if( _intersectionDetermination( a, b, c, d ) ){
                         ++count;
@@ -870,7 +855,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 }
 
                 if( count%2 == 0 ){
-                    _midPoints.remove( i-- );
+                    _midPoints.remove( i );
                     continue;
                 }
 
@@ -894,13 +879,15 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
                     // 全ての輪郭線との交差判定
                     for( int k=0; k<_points.size(); ++k ){
+                        int l = k + 1;
+                        if( k == _points.size()-1 ){
+                            l = 0;
+                        }
+
                         PointF a = _weightPoints[i];
                         PointF b = _weightPoints[j];
                         PointF c = _points.get( k );
-                        PointF d = _points.get( 0 );
-                        if( k != _points.size()-1 ){
-                            d = _points.get( k + 1 );
-                        }
+                        PointF d = _points.get( l );
 
                         if( _intersectionDetermination( a, b, c, d ) ){
                             determinate = true;
@@ -936,15 +923,17 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 }
 
                 // 一番近い近似中心線を求める
+                PointF tmpPos;
                 for( int j=0; j<_lineSegment.size(); ++j ){
                     double distance = _linePointDistance( _weightPoints[_lineSegment.get(j).x], _weightPoints[_lineSegment.get(j).y], _points.get(k) );
                     if( minDistance > distance ){
-                        PointF pos = _perpendicular( _weightPoints[_lineSegment.get(j).x], _weightPoints[_lineSegment.get(j).y], _points.get(k) );
-                        if( pos.x < 0.0 || pos.y < 0.0 ){
+                        try {
+                            tmpPos = _perpendicular( _weightPoints[_lineSegment.get(j).x], _weightPoints[_lineSegment.get(j).y], _points.get(k) );
+                        } catch( Exception e ){
                             continue;
                         }
                         minDistance = distance;
-                        nearestPoint = pos;
+                        nearestPoint = tmpPos;
                     }
                 }
 
@@ -962,7 +951,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     //Log.d("GetPixPos", "x:"+ pos.x );
                     //Log.d("GetPixPos", "y:"+ pos.y );
 
-                    int tmp = image[pos.y*_camView.getPrevWidth() + pos.x];
+                    int tmp = image[pos.y*_camImage.getWidth() + pos.x];
 
                     r += Color.red( tmp );
                     g += Color.green( tmp );
@@ -996,15 +985,17 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                 }
 
                 // 一番近い近似中心線を求める
+                PointF tmpPos;
                 for( int j=0; j<_lineSegment.size(); ++j ){
                     double distance = _linePointDistance( _weightPoints[_lineSegment.get( j ).x], _weightPoints[_lineSegment.get( j ).y], _points.get( k ) );
                     if( minDistance > distance ){
-                        PointF pos = _perpendicular( _weightPoints[_lineSegment.get( j ).x], _weightPoints[_lineSegment.get( j ).y], _points.get( k ) );
-                        if( pos.x < 0.0 || pos.y < 0.0 ){
+                        try {
+                            tmpPos = _perpendicular(_weightPoints[_lineSegment.get(j).x], _weightPoints[_lineSegment.get(j).y], _points.get(k));
+                        } catch( Exception e ){
                             continue;
                         }
                         minDistance = distance;
-                        nearestPointF = pos;
+                        nearestPointF = tmpPos;
                     }
                 }
 
@@ -1018,8 +1009,8 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     Point nowPos = posInLine( nearestPointF, _points.get( k ), i );
                     Point nextPos = posInLine( nearestPointF, _points.get( k ), i-1 );
 
-                    int nowColor = image[nowPos.y*_camView.getPrevWidth() + nowPos.x];
-                    int nextColor = image[nextPos.y*_camView.getPrevWidth() + nowPos.x];
+                    int nowColor = image[nowPos.y*_camImage.getWidth() + nowPos.x];
+                    int nextColor = image[nextPos.y*_camImage.getWidth() + nowPos.x];
 
                     // 背景候補と比較
                     int back = background.get( background.size()-1 );
@@ -1035,16 +1026,16 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
                     boolean nowBackground = false;
                     boolean nextObject = false;
 
-                    final double range = 80.0;
+                    final double range = 60.0;
 
                     if( _colorDistance( nowColor, back ) < range ||
-                            _colorDistance( nowColor, current ) < range ||
-                            _colorDistance( nowColor, front ) < range ){
+                        _colorDistance( nowColor, current ) < range ||
+                        _colorDistance( nowColor, front ) < range ){
                         nowBackground = true;
                     }
                     if( _colorDistance( nextColor, back ) >= range ||
-                            _colorDistance( nextColor, current ) >= range ||
-                            _colorDistance( nextColor, front ) >= range ){
+                        _colorDistance( nextColor, current ) >= range ||
+                        _colorDistance( nextColor, front ) >= range ){
                         nextObject = true;
                     }
 
@@ -1104,6 +1095,66 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
     private int[] _projectiveTransformation( final int[] image, final double[][] matrix )
     {
+        final SharedPreferences pref = PreferenceManager.getDefaultSharedPreferences( _context );
+
+        if( !pref.getBoolean("isUseMultiThread", true ) ) {
+            /*  バイリニア  */
+            // 横方向
+            Rect rect = new Rect( -1, -1, _objectRect.width()+2, _objectRect.height()+3 );
+
+            // 画像生成
+            final int[] xBilinearImage = new int[rect.width()*rect.height()];
+
+            final int interval1 = (int)Math.ceil( (double)rect.height() );
+
+            int start = rect.top;
+            int end = Math.min( interval1+rect.top, rect.height()+rect.top );
+
+            _bilinearX( xBilinearImage, image, matrix, start, end );
+
+            // 縦方向
+            rect = new Rect( -1, -1, _objectRect.width()+2, _objectRect.height()+2 );
+
+            final int[] bilinearImage = new int[rect.width()*rect.height()];
+
+            final int interval2 = (int)Math.ceil( (double)rect.height() );
+
+            start = rect.top;
+            end = Math.min( interval2+rect.top, rect.height()+rect.top );
+            _bilinear( bilinearImage, xBilinearImage, matrix, start, end );
+
+            /*  射影変換  */
+            // 横方向
+            rect = new Rect( 0, -1, _objectRect.width(), _objectRect.height()+2 );
+
+            // 画像生成
+            final int[] xImage = new int[rect.width()*rect.height()];
+
+            final int interval3 = (int)Math.ceil( (double)rect.height() );
+
+            start = rect.top;
+            end = Math.min( interval3+rect.top, rect.height()+rect.top );
+
+            _splitProjectiveTransformationX( xImage, bilinearImage, matrix, start, end );
+
+            // 縦方向
+            rect = new Rect( 0, 0, _objectRect.width(), _objectRect.height() );
+
+            final int[] ptImage = new int[rect.width()*rect.height()];
+
+            final int interval4 = (int)Math.ceil( (double)rect.height() );
+
+            start = rect.top;
+            end = Math.min( interval4+rect.top, rect.height()+rect.top );
+
+            _splitProjectiveTransformation( ptImage, xImage, matrix, start, end );
+
+            return ptImage;
+        }
+
+
+        int threadNum = pref.getInt("useThreadNum", 5 );
+
         /*  バイリニア  */
         // 横方向
         Rect rect = new Rect( -1, -1, _objectRect.width()+2, _objectRect.height()+3 );
@@ -1111,7 +1162,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         // 画像生成
         final int[] xBilinearImage = new int[rect.width()*rect.height()];
 
-        final int interval1 = (int)Math.ceil( (double)rect.height()/(double)MAX_THREAD_NUM );
+        final int interval1 = (int)Math.ceil( (double)rect.height()/(double)threadNum );
 
         final int threadNum1 = (int)Math.ceil( (double)rect.height()/(double)interval1 );
         final CountDownLatch latch1 = new CountDownLatch( threadNum1 );
@@ -1151,7 +1202,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
         final int[] bilinearImage = new int[rect.width()*rect.height()];
 
-        final int interval2 = (int)Math.ceil( (double)rect.height()/(double)MAX_THREAD_NUM );
+        final int interval2 = (int)Math.ceil( (double)rect.height()/(double)threadNum );
 
         final int threadNum2 = (int)Math.ceil( (double)rect.height()/(double)interval2 );
         final CountDownLatch latch2 = new CountDownLatch( threadNum2 );
@@ -1193,7 +1244,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         // 画像生成
         final int[] xImage = new int[rect.width()*rect.height()];
 
-        final int interval3 = (int)Math.ceil( (double)rect.height()/(double)MAX_THREAD_NUM );
+        final int interval3 = (int)Math.ceil( (double)rect.height()/(double)threadNum );
 
         final int threadNum3 = (int)Math.ceil( (double)rect.height()/(double)interval3 );
         final CountDownLatch latch3 = new CountDownLatch( threadNum3 );
@@ -1233,7 +1284,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
 
         final int[] ptImage = new int[rect.width()*rect.height()];
 
-        final int interval4 = (int)Math.ceil( (double)rect.height()/(double)MAX_THREAD_NUM );
+        final int interval4 = (int)Math.ceil( (double)rect.height()/(double)threadNum );
 
         final int threadNum4 = (int)Math.ceil( (double)rect.height()/(double)interval4 );
         final CountDownLatch latch4 = new CountDownLatch( threadNum4 );
@@ -1276,7 +1327,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     {
         // 画像の幅
         Rect dstRect = new Rect( -1, start, _objectRect.width()+2, end );
-        Rect srcRect = new Rect( 0, 0, _camView.getPrevWidth(), _camView.getPrevHeight() );
+        Rect srcRect = new Rect( 0, 0, _camImage.getWidth(), _camImage.getHeight() );
 
         for( int i=dstRect.top; i<dstRect.bottom; ++i ) {
             for( int j=dstRect.left; j<dstRect.right; ++j ) {
@@ -1506,7 +1557,7 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
     private void _circumscribedQuadrangle( double fineness )
     {
         /*  変数宣言  */
-        double minFerreDiameter = Math.sqrt( (double)( _camView.getPrevWidth()*_camView.getPrevWidth() + _camView.getPrevHeight()*_camView.getPrevHeight() ) );
+        double minFerreDiameter = Math.sqrt( (double)( _camImage.getWidth()*_camImage.getWidth() + _camImage.getHeight()*_camImage.getHeight() ) );
         double minAngle = -1.0;
         double minUpperDistance = 0.0, minLowerDistance = 0.0;
         double maxUpperDistance, maxLowerDistance;
@@ -1613,13 +1664,15 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         /*  変数宣言  */
         PointF[] weightHistory = new PointF[k];
 
-        /*  初期化  */
-        for( int i=0; i<k; ++i ) weightPoints[i] = new PointF( 0.0f, 0.0f );
-
         // とりあえず最大200回で打ち切る
         for( int l=0; l < 200; ++l ){
+            /*  初期化  */
+            for( int i=0; i<k; ++i ) weightPoints[i] = new PointF( 0.0f, 0.0f );
+
             // 現在の重心を保存
-            System.arraycopy( weightPoints, 0, weightHistory, 0, k );
+            for( int i=0; i<k; ++i ){
+                weightHistory[i] = new PointF( weightPoints[i].x, weightPoints[i].y );
+            }
 
             // 重心算出
             double[] count = new double[k];
@@ -1765,16 +1818,13 @@ public class Contour extends SurfaceView implements SurfaceHolder.Callback
         PointF abN = new PointF( b.x - a.x, b.y - a.y );
         _vectorNormalization( abN );
 
-        PointF ret = new PointF();
+        PointF ret = new PointF( a.x, a.y );
 
         /*  計算  */
         double distance = _innerProduct( abN, ap );
 
         if( distance < 0.0 || distance > _calculateDistance( a, b ) ){
-            ret.x = -1.0f;
-            ret.y = -1.0f;
-
-            return ret;
+           throw new RuntimeException("点が線分の範囲外です");
         }
 
         ret.x += abN.x*distance;

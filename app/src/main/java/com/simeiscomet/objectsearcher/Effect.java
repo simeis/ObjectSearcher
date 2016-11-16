@@ -8,6 +8,7 @@ import android.graphics.MaskFilter;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.view.Display;
 import android.view.SurfaceHolder;
@@ -33,6 +34,8 @@ public class Effect extends SurfaceView implements SurfaceHolder.Callback
 
     private Handler _handler;
 
+    private Rect _effectRect;
+
     private float _frame;
 
     private boolean _flag = true;
@@ -47,9 +50,23 @@ public class Effect extends SurfaceView implements SurfaceHolder.Callback
         WindowManager winMan = ( WindowManager)context.getSystemService( Context.WINDOW_SERVICE );
         _display = winMan.getDefaultDisplay();
 
+        Canvas canvas = _holder.lockCanvas();
+        if( canvas != null ){
+            _effectRect = new Rect( 0, 0, canvas.getWidth(), canvas.getWidth()*3/4 );
+            _holder.unlockCanvasAndPost( canvas );
+        } else {
+            Rect winRect = new Rect();
+            winMan.getDefaultDisplay().getRectSize( winRect );
+            _effectRect = new Rect( 0, 0, winRect.width(), winRect.width()*3/4 );
+        }
         _holder.setFormat( PixelFormat.TRANSLUCENT );
-        setZOrderOnTop( true );
 
+        setZOrderOnTop(true);
+    }
+
+    @Override
+    public void surfaceCreated( SurfaceHolder holder )
+    {
         // mHandlerを通じてUI Threadへ処理をキューイング
         _handler = new Handler();
         _handler.postDelayed( new Runnable() {
@@ -59,11 +76,6 @@ public class Effect extends SurfaceView implements SurfaceHolder.Callback
                 _handler.postDelayed( this, DELAY );
             }
         }, DELAY);
-    }
-
-    @Override
-    public void surfaceCreated( SurfaceHolder holder )
-    {
         /*try {
         } catch( IOException e ) {
         }*/
@@ -103,9 +115,9 @@ public class Effect extends SurfaceView implements SurfaceHolder.Callback
                 DecelerateInterpolator intpr = new DecelerateInterpolator();
                 for( int i=0; i<COUNT; ++i ){
                     float f = (_frame+SPAN*i)%LOOP/LOOP;
-                    float padding = canvas.getWidth() * intpr.getInterpolation( f ) / 5.0f + PADDING;
-                    canvas.drawRect( padding, padding, canvas.getWidth() - padding, canvas.getHeight() - padding, paintGlow );
-                    canvas.drawRect( padding, padding, canvas.getWidth() - padding, canvas.getHeight() - padding, paint );
+                    float padding = _effectRect.width() * intpr.getInterpolation( f ) * 3.0f / 16.0f + PADDING;
+                    canvas.drawRect( padding, padding-(_effectRect.height()-canvas.getHeight()), _effectRect.width() - padding, _effectRect.height() - padding, paintGlow );
+                    canvas.drawRect( padding, padding-(_effectRect.height()-canvas.getHeight()), _effectRect.width() - padding, _effectRect.height() - padding, paint );
                 }
             }
 

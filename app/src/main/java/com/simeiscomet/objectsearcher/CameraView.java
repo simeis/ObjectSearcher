@@ -6,6 +6,7 @@ package com.simeiscomet.objectsearcher;
  */
 
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
 import android.hardware.Camera;
@@ -21,7 +22,6 @@ import android.view.WindowManager;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 public class CameraView extends SurfaceView implements Callback, Camera.PreviewCallback
 {
@@ -42,8 +42,9 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
 
     private CountDownLatch _latch;
 
+    private BitmapApplication _app;
 
-    public CameraView( Context context )
+    public CameraView( Context context, BitmapApplication app )
     {
         super( context );
         _context = context;
@@ -53,6 +54,8 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
 
         WindowManager winMan = (WindowManager)context.getSystemService(Context.WINDOW_SERVICE);
         _display = winMan.getDefaultDisplay();
+
+        _app = app;
     }
 
     @Override
@@ -212,12 +215,12 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
             _latch = new CountDownLatch(1);
             _camera.autoFocus( _AutoFocusListener );
 
-            try {
+/*            try {
                 _latch.await( 1, TimeUnit.SECONDS );
             } catch ( InterruptedException e ){
                 e.printStackTrace();
             }
-
+*/
         }
         return true;
     }
@@ -293,10 +296,16 @@ public class CameraView extends SurfaceView implements Callback, Camera.PreviewC
                 _camera.stopPreview();
                 _isShot = true;
                 //Log.i( "shot", "complate" );
+                onPreviewFrame( _frameBuffer, _camera );
             }
             _isTake = false;
 
-            _latch.countDown();
+            _app.setObj( getBitmap() );
+            Intent intent = new Intent( _context, ObjectSelector.class );
+            intent.setFlags( Intent.FLAG_ACTIVITY_NEW_TASK );
+            _context.startActivity( intent );
+
+            //_latch.countDown();
         }
     };
 }

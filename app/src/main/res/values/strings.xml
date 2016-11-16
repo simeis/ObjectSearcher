@@ -2,7 +2,21 @@
     <string name="app_name">ObjectSearcher</string>
     <string name="php_url">http://simeiscomet.com/object_searcher/NetworkInterface.php</string>
 
+    <string name="title_activity_object_selector">ObjectSelector</string>
+    <string name="dialog_image_description">物体画像</string>
 
-    <string name="dummy_button">Dummy Button</string>
-    <string name="dummy_content">DUMMY\nCONTENT</string>
+    <string name="sender_text_title">Please input object data.</string>
+    <string name="sender_text_name">Name*</string>
+    <string name="sender_text_category">Category*</string>
+    <string name="sender_text_type">Type*</string>
+    <string name="sender_text_company">Company</string>
+    <string name="sender_text_product">Product</string>
+    <string name="sender_check_failure">Failure</string>
+    <string name="sender_button_send">Send</string>
+
+    <string name="setting_text_projective_transformation">射影変換</string>
+    <string name="setting_check_multi_thread">マルチスレッド</string>
+    <string name="setting_text_information">出力画像が正しくない場合はOFFにしてください</string>
+    <string name="setting_text_thread_num">使用スレッド数</string>
+    <string name="setting_text_title">設定</string>
 </resources>
